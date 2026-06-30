@@ -1,0 +1,133 @@
+# =============================================================================
+# Zabbix E2E 모니터링 스택 (단일 VM / Docker Compose)
+#
+# 설계 원칙: 요구사항서가 명시한 서비스(server·web·agent2·postgres·nginx) +
+#            Browser Item에 필수인 selenium(WebDriver)만 포함한 "최소 구성".
+# 노출 정책: 외부에는 Zabbix Web UI(8080)만 공개. 나머지는 내부 브리지 네트워크
+#            (zabbix-net)로만 통신 → 요구사항 2.3 "8080 제외 외부 차단" 준수.
+#
+# ※ compose 'version:' 키는 Compose Spec에서 폐기(deprecated)되어 생략함.
+#    (공식 문서: docker compose는 더 이상 version 필드를 사용하지 않음)
+# ※ 모든 이미지는 재현성을 위해 풀 버전 고정(:latest 미사용). 업그레이드는 의도적으로만 수행.
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # 1) PostgreSQL — Zabbix 데이터/설정 저장소
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16.14-alpine       # 요구 15.x↑ 충족, Zabbix 7.0 지원범위(≤16). 패치 고정. alpine=경량.
+    container_name: zbx-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}          # 공식 postgres 이미지 표준 변수. 값은 .env로 분리.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgsql-data:/var/lib/postgresql/data    # DB 영속화. 컨테이너 재생성에도 데이터 유지.
+    networks:
+      - zabbix-net
+    # 외부 포트 미공개(요구 2.3: PostgreSQL 외부 오픈 금지). 내부에서 hostname 'postgres'로 접근.
+    healthcheck:                                # 서버가 DB 준비 전 기동해 실패하는 것을 방지(depends_on과 연계)
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # 2) Zabbix Server — 수집·트리거 계산·알림의 중앙 두뇌
+  # ---------------------------------------------------------------------------
+  zabbix-server:
+    image: zabbix/zabbix-server-pgsql:alpine-7.0.27  # 7.0 LTS 최신 패치 고정(요구 "7.x LTS"). pgsql=PostgreSQL 백엔드.
+    container_name: zbx-server
+    restart: unless-stopped
+    environment:
+      DB_SERVER_HOST: postgres                 # DB 컨테이너 서비스명으로 접속(공식 zabbix-docker 변수).
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      # --- Browser Item 필수 설정 (공식 확인: 둘 다 Zabbix 7.0.0부터) ---
+      ZBX_STARTBROWSERPOLLERS: 1               # 브라우저 폴러 인스턴스 수. 0이면 Browser Item 동작 안 함.
+      ZBX_WEBDRIVERURL: http://selenium:4444   # WebDriver 엔드포인트. selenium 서비스(4444)를 가리킴.
+    depends_on:
+      postgres:
+        condition: service_healthy             # DB가 healthy가 된 뒤에 기동(스키마 초기화 안정성).
+    networks:
+      - zabbix-net
+    # 10051은 외부 미공개(요구 2.3). agent2가 같은 네트워크 내부에서 접속.
+
+  # ---------------------------------------------------------------------------
+  # 3) Zabbix Web Frontend — 관리/대시보드 UI (외부 공개 대상)
+  #    ※ 이 서비스는 내부적으로 nginx를 쓰지만 "모니터링 대상 nginx"와 별개임.
+  # ---------------------------------------------------------------------------
+  zabbix-web:
+    image: zabbix/zabbix-web-nginx-pgsql:alpine-7.0.27  # nginx+php 프론트엔드, PostgreSQL 연동판. 서버와 동일 패치.
+    container_name: zbx-web
+    restart: unless-stopped
+    environment:
+      ZBX_SERVER_HOST: zabbix-server           # UI가 데이터를 가져올 Zabbix Server 위치.
+      DB_SERVER_HOST: postgres
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      PHP_TZ: ${PHP_TZ}                         # PHP 타임존. 그래프/로그 시간 표시 정확성.
+      ZBX_SERVER_NAME: ${ZBX_SERVER_NAME}       # UI 상단에 표시될 설치 이름.
+    ports:
+      - "8080:8080"                            # ★ 유일하게 외부 공개하는 포트(관리자 Web 접속).
+    depends_on:
+      postgres:
+        condition: service_healthy
+      zabbix-server:
+        condition: service_started
+    networks:
+      - zabbix-net
+
+  # ---------------------------------------------------------------------------
+  # 4) Zabbix Agent 2 — 호스트/서버 메트릭 수집 에이전트
+  # ---------------------------------------------------------------------------
+  zabbix-agent2:
+    image: zabbix/zabbix-agent2:alpine-7.0.27  # 서버와 동일 패치로 고정.
+    container_name: zbx-agent2
+    restart: unless-stopped
+    environment:
+      ZBX_SERVER_HOST: zabbix-server           # Passive 수집 시 이 서버의 접속을 허용.
+      ZBX_HOSTNAME: "Zabbix server"            # Zabbix 기본 호스트명과 매칭(UI 기본 호스트 인터페이스를 이 컨테이너로 지정 예정).
+    depends_on:
+      zabbix-server:
+        condition: service_started
+    networks:
+      - zabbix-net
+    # 10050 외부 미공개. server가 내부에서 zabbix-agent2:10050으로 접속.
+
+  # ---------------------------------------------------------------------------
+  # 5) Selenium (standalone-chrome) — Browser Item용 WebDriver
+  # ---------------------------------------------------------------------------
+  selenium:
+    image: selenium/standalone-chrome:149.0-20260606  # WebDriver+Chrome 일체형(빌드 고정). ZBX_WEBDRIVERURL이 가리킴.
+    container_name: zbx-selenium
+    restart: unless-stopped
+    shm_size: "2gb"                            # ★ Chrome은 기본 /dev/shm(64MB)에서 크래시. 공유메모리 확대 필수.
+    networks:
+      - zabbix-net
+    # 4444(WebDriver)는 내부 전용. 디버깅용 noVNC(7900)를 보고 싶으면 임시로 "7900:7900" 추가 가능.
+
+  # ---------------------------------------------------------------------------
+  # 6) nginx 샘플 앱 — Web Scenario의 "모니터링 대상" (산출물 3)
+  #    ※ 현재는 기본 이미지(기본 페이지에 "Welcome to nginx" 포함 → Step1 검증 충족).
+  #       /health, /status 커스텀 경로는 다음 작업에서 conf로 추가 예정.
+  # ---------------------------------------------------------------------------
+  nginx:
+    image: nginx:1.31-alpine                   # 요구 1.24↑ 충족(mainline). 모니터링 대상 샘플.
+    container_name: zbx-nginx-app
+    restart: unless-stopped
+    networks:
+      - zabbix-net
+    # 외부 포트 미공개(요구 2.3: 8080 외 차단). Zabbix Server가 내부에서 http://nginx/ 로 접근.
+
+# -----------------------------------------------------------------------------
+volumes:
+  pgsql-data:                                  # PostgreSQL 데이터 영속 볼륨
+
+networks:
+  zabbix-net:                                  # 모든 컴포넌트가 붙는 단일 사용자 정의 브리지.
+    driver: bridge                             # 서비스명(예: postgres, selenium, nginx)으로 DNS 해석됨.
