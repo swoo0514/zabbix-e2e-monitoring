@@ -113,13 +113,16 @@ services:
 
   # ---------------------------------------------------------------------------
   # 6) nginx 샘플 앱 — Web Scenario의 "모니터링 대상" (산출물 3)
-  #    ※ 현재는 기본 이미지(기본 페이지에 "Welcome to nginx" 포함 → Step1 검증 충족).
-  #       /health, /status 커스텀 경로는 다음 작업에서 conf로 추가 예정.
+  #    ※ conf.d/html을 bind mount해 /(메인)·/health(200+OK)·/status(stub_status) 제공.
+  #       conf.d 마운트 시 이미지 기본 default.conf는 대체됨.
   # ---------------------------------------------------------------------------
   nginx:
     image: nginx:1.31-alpine                   # 요구 1.24↑ 충족(mainline). 모니터링 대상 샘플.
     container_name: zbx-nginx-app
     restart: unless-stopped
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro    # 서버 설정(bind mount, 읽기전용). 기본 default.conf 대체.
+      - ./nginx/html:/usr/share/nginx/html:ro  # 정적 콘텐츠(메인 페이지). Required String 포함.
     networks:
       - zabbix-net
     # 외부 포트 미공개(요구 2.3: 8080 외 차단). Zabbix Server가 내부에서 http://nginx/ 로 접근.
