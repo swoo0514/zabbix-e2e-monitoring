@@ -123,6 +123,7 @@ services:
     volumes:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro    # 서버 설정(bind mount, 읽기전용). 기본 default.conf 대체.
       - ./nginx/html:/usr/share/nginx/html:ro  # 정적 콘텐츠(메인 페이지). Required String 포함.
+      - ./nginx/auth:/etc/nginx/auth:ro        # Basic Auth 자격 파일(.htpasswd). /secure 보호용(고도화).
     networks:
       - zabbix-net
     # 외부 포트 미공개(요구 2.3: 8080 외 차단). Zabbix Server가 내부에서 http://nginx/ 로 접근.
