@@ -1,3 +1,4 @@
 /.idea/
 /private
 .env
+nginx/auth/.htpasswd
