@@ -30,4 +30,21 @@
 
 ---
 
-## #2. (작성 예정)
+## #2. Basic Auth가 걸리지 않음 (`return`이 `auth_basic`보다 먼저 실행)
+
+- **발생일:** 2026-07-01 (nginx `/secure` 고도화 검증 중)
+- **증상:** `/secure`를 자격 없이 요청했는데 `401`이 아니라 **`200 "SECURE OK"`** 반환 → 인증이 무력화됨.
+- **환경:** nginx `location = /secure` 에 `auth_basic` + `return 200 "SECURE OK";` 조합.
+
+### 원인 분석
+- nginx 요청 처리 단계 순서: **rewrite → access → content**.
+- `return`(rewrite 모듈)은 **rewrite 단계에서 즉시 요청을 종료**한다.
+- `auth_basic`은 **access 단계**에서 검사되는데, `return`이 그 전에 끝내버려 **auth 검사를 건너뜀**.
+
+### 해결
+- `return` 대신 **실제 파일 서빙(`alias`)** 으로 변경 → access 단계(auth) 통과 후 content 단계에서 파일 서빙.
+- 보호 대상 파일(`secure.txt`)은 **webroot 밖(`/etc/nginx/auth`)** 에 두어 `/secure` 외 경로로 직접 노출되지 않게 함.
+
+### 배운 점
+- **인증이 필요한 응답에는 `return`을 쓰지 않는다** — `return`은 access phase(auth)를 건너뛴다.
+- nginx는 "지시어를 쓴 순서"가 아니라 "**처리 단계(phase) 순서**"로 동작한다.
