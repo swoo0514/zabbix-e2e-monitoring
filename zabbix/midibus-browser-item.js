@@ -8,16 +8,16 @@
  * 반환 JSON : {"steps":{login,category,deploy,media,securitykey,subuser}, "failed_step":N}
  *
  * 선행조건: selenium 컨테이너에 /testdata/beach.mp4 (compose 볼륨 마운트).
- *          → VM에서 git pull && docker compose up -d
+ *          -> VM에서 git pull && docker compose up -d
  *
  * 핵심 해결책:
  *  - 네이티브 confirm 자동 수락: opts.capabilities.alwaysMatch.unhandledPromptBehavior="accept"
- *  - 로그인 후 팝업 3종 → /config 풀 네비게이트로 우회
+ *  - 로그인 후 팝업 3종 -> /config 풀 네비게이트로 우회
  *  - 카테고리 생성 버튼(#addCategoryBtn)은 미디어 서브메뉴(#menu_media_icon) 열어야 노출
- *  - 생성 직후 오버레이 → /config 풀 네비게이트로 제거
- *  - wait API 없음 → findElement 폴링(clickReady/typeReady/waitForXpath/waitGone)
+ *  - 생성 직후 오버레이 -> /config 풀 네비게이트로 제거
+ *  - wait API 없음 -> findElement 폴링(clickReady/typeReady/waitForXpath/waitGone)
  *
- * ⚠️ 미디어 스텝은 매 실행 업로드+서버 인코딩 → 무거움. 긴 주기(예: 1h)/수동 실행 권장.
+ * [주의] 미디어 스텝은 매 실행 업로드+서버 인코딩 -> 무거움. 긴 주기(예: 1h)/수동 실행 권장.
  */
 var params = JSON.parse(value);
 var opts = Browser.chromeOptions();
@@ -42,7 +42,7 @@ try {
   browser.navigate("https://midibus.kinxcdn.com/config");
   clickReady("#categoryTab-tab");
 
-  // Step 2: 카테고리 생성 → 자동배포 → 삭제
+  // Step 2: 카테고리 생성 -> 자동배포 -> 삭제
   if (waitFor("#allCategories a[title=\"zbx-e2e-test\"]", 10) === null) {
     clickReady("#menu_media_icon"); clickReady("#addCategoryBtn");
     typeReady("#newCategoryName", "zbx-e2e-test");
@@ -57,7 +57,7 @@ try {
     clickReady("#deleteCategoryBtn");
   }
 
-  // Step 3: 미디어 업로드 → 확인 → 삭제 → 확인
+  // Step 3: 미디어 업로드 -> 확인 -> 삭제 -> 확인
   clickReady("#menu_media_icon");
   clickReady("#fileUploadBtn_small");
   typeReady(".qq-upload-button input[type=\"file\"]", "/testdata/beach.mp4");   // 숨은 파일 input
@@ -69,7 +69,7 @@ try {
     if (nid) {
       var chkId = nid.replace("mediaName_", "mediaCheck_");
       clickReady("#" + chkId);                                                   // 미디어 선택
-      clickReady("#mediaActionSelector option[value=\"delete\"]");              // 작업선택→삭제(confirm 자동수락)
+      clickReady("#mediaActionSelector option[value=\"delete\"]");              // 작업선택->삭제(confirm 자동수락)
       steps.dbg_media_deleted = waitGone("#" + chkId, 30);                       // 삭제 확인
     }
   }
