@@ -10,7 +10,7 @@ var opts = Browser.chromeOptions();
 opts.capabilities.alwaysMatch.unhandledPromptBehavior = "accept";
 var browser = new Browser(opts);
 var steps = { login:0, category:0, deploy:0, media:0, securitykey:0, subuser:0 };
-steps.v = "s3dbg3";
+steps.v = "s3dbg4";
 
 function waitFor(sel, tries){ tries=tries||50; for(var i=0;i<tries;i++){ var e=browser.findElement("css selector",sel); if(e!==null){ return e; } } return null; }
 function waitForXpath(xp, tries){ tries=tries||50; for(var i=0;i<tries;i++){ var e=browser.findElement("xpath",xp); if(e!==null){ return e; } } return null; }
@@ -49,13 +49,15 @@ try {
     clickReady("#deleteCategoryBtn");
   }
 
-  // Step 3: 업로드 버튼은 좌측 메뉴 상주 -> 바로 클릭 후 모달 대기
+  // Step 3: 업로드 진입 클릭 에러/qq 등록 여부를 정확히 캡처
   steps.dbg_enter_found = (waitFor("#fileUploadBtn_small", 20) !== null);
-  steps.dbg_m_enter = clickReady("#fileUploadBtn_small");
-  if (!steps.dbg_m_enter) { steps.dbg_m_enter_img = clickReady("#fileUploadBtn_small img"); }
-  steps.dbg_trig_found = (waitFor("#trigger-upload", 30) !== null);
+  try { browser.findElement("css selector", "#fileUploadBtn_small").click(); steps.dbg_m_enter = true; }
+  catch (e3) { steps.dbg_enter_err = "" + e3; }
+  waitFor("#trigger-upload", 20);
   steps.dbg_m_file = typeReady('.qq-upload-button input[type="file"]', "/testdata/beach.mp4");
-  steps.dbg_m_trigger = clickReady("#trigger-upload");
+  steps.dbg_qq_listed = (waitFor(".qq-upload-list li", 15) !== null);   // qq가 파일을 큐에 등록했나
+  try { browser.findElement("css selector", "#trigger-upload").click(); steps.dbg_m_trigger = true; }
+  catch (e4) { steps.dbg_trig_err = "" + e4; }
   var nameDiv = waitForXpath("//div[contains(@id,'mediaName_') and contains(text(),'beach.mp4')]", 120);
   steps.dbg_m_found = (nameDiv !== null);
   if (nameDiv !== null) {
