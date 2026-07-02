@@ -11,7 +11,7 @@ opts.capabilities.alwaysMatch.unhandledPromptBehavior = "accept";
 var browser = new Browser(opts);
 browser.setScreenSize(1920, 1080);   // 반응형 접힘/뷰포트 밖 방지: 데스크톱 해상도 강제
 var steps = { login:0, category:0, deploy:0, media:0, securitykey:0, subuser:0 };
-steps.v = "s3dbg9";
+steps.v = "s3dbg10";
 
 function waitFor(sel, tries){ tries=tries||50; for(var i=0;i<tries;i++){ var e=browser.findElement("css selector",sel); if(e!==null){ return e; } } return null; }
 function waitForXpath(xp, tries){ tries=tries||50; for(var i=0;i<tries;i++){ var e=browser.findElement("xpath",xp); if(e!==null){ return e; } } return null; }
@@ -63,9 +63,9 @@ try {
     steps.media = 1;                                                            // 업로드+정보확인
     var nid = nameDiv.getAttribute("id");                                       // mediaName_<key>
     var chkId = nid.replace("mediaName_", "mediaCheck_");
-    clickReady("#" + chkId);                                                    // 미디어 선택
-    clickReady('#mediaActionSelector option[value="delete"]');                 // 작업선택 -> 삭제(confirm 자동수락)
-    steps.dbg_media_deleted = waitGone("#" + chkId, 30);                        // 삭제 확인
+    steps.dbg_chk_clicked = clickReady("#" + chkId);                            // 미디어 체크박스 선택
+    steps.dbg_sel_delete = typeReady("#mediaActionSelector", "삭제");           // 셀렉트에 '삭제' 입력 -> change 이벤트 -> confirm 자동수락
+    steps.dbg_media_deleted = waitGone("#" + chkId, 40);                        // 삭제 확인(행 사라짐)
   }
 } catch (err) {
   steps.error = "" + err;
