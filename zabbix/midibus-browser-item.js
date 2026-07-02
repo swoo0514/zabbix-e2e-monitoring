@@ -11,7 +11,7 @@ opts.capabilities.alwaysMatch.unhandledPromptBehavior = "accept";
 var browser = new Browser(opts);
 browser.setScreenSize(1920, 1080);   // 반응형 접힘/뷰포트 밖 방지: 데스크톱 해상도 강제
 var steps = { login:0, category:0, deploy:0, media:0, securitykey:0, subuser:0 };
-steps.v = "s3dbg6";
+steps.v = "s3dbg7";
 
 function waitFor(sel, tries){ tries=tries||50; for(var i=0;i<tries;i++){ var e=browser.findElement("css selector",sel); if(e!==null){ return e; } } return null; }
 function waitForXpath(xp, tries){ tries=tries||50; for(var i=0;i<tries;i++){ var e=browser.findElement("xpath",xp); if(e!==null){ return e; } } return null; }
@@ -50,24 +50,17 @@ try {
     clickReady("#deleteCategoryBtn");
   }
 
-  // Step 3: 미디어 업로드 (.fileUploadBtn = 실제 보이는 진입 버튼. #fileUploadBtn_small은 display:none)
+  // Step 3: 미디어 업로드 + 업로더 자체 "완료" 신호로 확인 (목록/삭제는 목록화면 진입법 확인 후)
   steps.dbg_m_enter = clickReady(".fileUploadBtn");                              // 업로드 패널 열기
-  waitFor("#trigger-upload", 30);                                               // 패널/업로더 표시 대기
+  waitFor("#trigger-upload", 30);
   steps.dbg_m_file = typeReady('.qq-upload-button input[type="file"]', "/testdata/beach.mp4");
-  steps.dbg_qq_listed = (waitFor(".qq-upload-list li", 15) !== null);           // 파일이 큐에 올랐나
-  steps.dbg_m_trigger = clickReady("#trigger-upload");                          // 업로드 시작(이제 보이고 enabled)
-  var nameDiv = waitForXpath("//div[contains(@id,'mediaName_') and contains(text(),'beach.mp4')]", 120);
-  steps.dbg_m_found = (nameDiv !== null);
-  if (nameDiv !== null) {
-    steps.media = 1;
-    var nid = nameDiv.getAttribute("id");
-    if (nid) {
-      var chkId = nid.replace("mediaName_", "mediaCheck_");
-      clickReady("#" + chkId);
-      clickReady('#mediaActionSelector option[value="delete"]');
-      steps.dbg_media_deleted = waitGone("#" + chkId, 30);
-    }
-  }
+  steps.dbg_qq_listed = (waitFor(".qq-upload-list li", 15) !== null);
+  steps.dbg_m_trigger = clickReady("#trigger-upload");                          // 업로드 시작
+  var okLi = waitFor(".qq-upload-list li.qq-upload-success", 200);              // 업로드 성공 대기(전송+처리 시간)
+  steps.dbg_upload_success = (okLi !== null);
+  var anyLi = waitFor(".qq-upload-list li", 5);
+  if (anyLi !== null) { steps.dbg_qq_liclass = anyLi.getAttribute("class"); }   // 성공/실패/진행 상태 클래스 관찰
+  if (steps.dbg_upload_success) { steps.media = 1; }
 } catch (err) {
   steps.error = "" + err;
   try { steps.screenshot = browser.getScreenshot(); } catch (e2) {}
