@@ -9,8 +9,9 @@ var params = JSON.parse(value);
 var opts = Browser.chromeOptions();
 opts.capabilities.alwaysMatch.unhandledPromptBehavior = "accept";
 var browser = new Browser(opts);
+browser.setScreenSize(1920, 1080);   // 반응형 접힘/뷰포트 밖 방지: 데스크톱 해상도 강제
 var steps = { login:0, category:0, deploy:0, media:0, securitykey:0, subuser:0 };
-steps.v = "s3dbg4";
+steps.v = "s3dbg5";
 
 function waitFor(sel, tries){ tries=tries||50; for(var i=0;i<tries;i++){ var e=browser.findElement("css selector",sel); if(e!==null){ return e; } } return null; }
 function waitForXpath(xp, tries){ tries=tries||50; for(var i=0;i<tries;i++){ var e=browser.findElement("xpath",xp); if(e!==null){ return e; } } return null; }
@@ -49,15 +50,24 @@ try {
     clickReady("#deleteCategoryBtn");
   }
 
-  // Step 3: 업로드 진입 클릭 에러/qq 등록 여부를 정확히 캡처
-  steps.dbg_enter_found = (waitFor("#fileUploadBtn_small", 20) !== null);
-  try { browser.findElement("css selector", "#fileUploadBtn_small").click(); steps.dbg_m_enter = true; }
-  catch (e3) { steps.dbg_enter_err = "" + e3; }
+  // Step 3: 업로드 진입 상태 정밀 진단 (display/disabled + li 클릭 시도)
+  var fub = waitFor("#fileUploadBtn_small", 20);
+  steps.dbg_enter_found = (fub !== null);
+  if (fub !== null) { steps.dbg_fub_style = fub.getAttribute("style"); }
+  try { fub.click(); steps.dbg_m_enter = true; } catch (e3) { steps.dbg_enter_err = "" + e3; }
+  if (steps.dbg_m_enter !== true) {
+    try { browser.findElement("xpath", "//div[@id='fileUploadBtn_small']/..").click(); steps.dbg_m_enter_li = true; }
+    catch (e5) { steps.dbg_enter_li_err = "" + e5; }
+  }
   waitFor("#trigger-upload", 20);
   steps.dbg_m_file = typeReady('.qq-upload-button input[type="file"]', "/testdata/beach.mp4");
-  steps.dbg_qq_listed = (waitFor(".qq-upload-list li", 15) !== null);   // qq가 파일을 큐에 등록했나
-  try { browser.findElement("css selector", "#trigger-upload").click(); steps.dbg_m_trigger = true; }
-  catch (e4) { steps.dbg_trig_err = "" + e4; }
+  steps.dbg_qq_listed = (waitFor(".qq-upload-list li", 15) !== null);
+  var trig = waitFor("#trigger-upload", 10);
+  if (trig !== null) {
+    steps.dbg_trig_class = trig.getAttribute("class");
+    steps.dbg_trig_disabled = "" + trig.getAttribute("disabled");
+    try { trig.click(); steps.dbg_m_trigger = true; } catch (e4) { steps.dbg_trig_err = "" + e4; }
+  }
   var nameDiv = waitForXpath("//div[contains(@id,'mediaName_') and contains(text(),'beach.mp4')]", 120);
   steps.dbg_m_found = (nameDiv !== null);
   if (nameDiv !== null) {
