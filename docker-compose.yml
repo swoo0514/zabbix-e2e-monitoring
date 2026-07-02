@@ -107,6 +107,8 @@ services:
     container_name: zbx-selenium
     restart: unless-stopped
     shm_size: "2gb"                            # ★ Chrome은 기본 /dev/shm(64MB)에서 크래시. 공유메모리 확대 필수.
+    volumes:
+      - ./testdata:/testdata:ro                # Browser Item 미디어 업로드 테스트용(파일 input에 /testdata/... 경로 전달)
     networks:
       - zabbix-net
     # 4444(WebDriver)는 내부 전용. 디버깅용 noVNC(7900)를 보고 싶으면 임시로 "7900:7900" 추가 가능.
