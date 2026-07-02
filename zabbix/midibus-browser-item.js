@@ -11,7 +11,7 @@ opts.capabilities.alwaysMatch.unhandledPromptBehavior = "accept";
 var browser = new Browser(opts);
 browser.setScreenSize(1920, 1080);   // 반응형 접힘/뷰포트 밖 방지: 데스크톱 해상도 강제
 var steps = { login:0, category:0, deploy:0, media:0, securitykey:0, subuser:0 };
-steps.v = "s3dbg8";
+steps.v = "s3dbg9";
 
 function waitFor(sel, tries){ tries=tries||50; for(var i=0;i<tries;i++){ var e=browser.findElement("css selector",sel); if(e!==null){ return e; } } return null; }
 function waitForXpath(xp, tries){ tries=tries||50; for(var i=0;i<tries;i++){ var e=browser.findElement("xpath",xp); if(e!==null){ return e; } } return null; }
@@ -56,6 +56,7 @@ try {
   steps.dbg_m_file = typeReady('.qq-upload-button input[type="file"]', "/testdata/beach.mp4");
   steps.dbg_m_trigger = clickReady("#trigger-upload");                          // 업로드 시작
   steps.dbg_upload_success = (waitFor(".qq-upload-list li.qq-upload-success", 200) !== null);  // 전송+처리 완료 대기
+  browser.navigate("https://midibus.kinxcdn.com/media");                        // 미디어 목록 화면으로 이동(URL 추정)
   var nameDiv = waitForXpath("//div[contains(@id,'mediaName_') and contains(text(),'beach.mp4')]", 120);  // 목록에서 확인
   steps.dbg_m_found = (nameDiv !== null);
   if (nameDiv !== null) {
