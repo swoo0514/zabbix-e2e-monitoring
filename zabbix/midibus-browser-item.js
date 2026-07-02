@@ -7,13 +7,17 @@
  *             url=https://midibus.kinxcdn.com/login   (계정은 Secret 매크로)
  * 반환 JSON : {"steps":{login,category,deploy,media,securitykey,subuser}, "failed_step":N}
  *
+ * 선행조건: selenium 컨테이너에 /testdata/beach.mp4 (compose 볼륨 마운트).
+ *          → VM에서 git pull && docker compose up -d
+ *
  * 핵심 해결책:
- *  - 네이티브 confirm(삭제 등) 자동 수락: opts.capabilities.alwaysMatch.unhandledPromptBehavior="accept"
- *    (top-level W3C 캐파 위치가 관건. chromeOptions() 루트에 넣으면 안 먹힘)
+ *  - 네이티브 confirm 자동 수락: opts.capabilities.alwaysMatch.unhandledPromptBehavior="accept"
  *  - 로그인 후 팝업 3종 → /config 풀 네비게이트로 우회
  *  - 카테고리 생성 버튼(#addCategoryBtn)은 미디어 서브메뉴(#menu_media_icon) 열어야 노출
  *  - 생성 직후 오버레이 → /config 풀 네비게이트로 제거
- *  - wait API 없음 → findElement 폴링(clickReady/typeReady)
+ *  - wait API 없음 → findElement 폴링(clickReady/typeReady/waitForXpath/waitGone)
+ *
+ * ⚠️ 미디어 스텝은 매 실행 업로드+서버 인코딩 → 무거움. 긴 주기(예: 1h)/수동 실행 권장.
  */
 var params = JSON.parse(value);
 var opts = Browser.chromeOptions();
@@ -22,6 +26,8 @@ var browser = new Browser(opts);
 var steps = { login:0, category:0, deploy:0, media:0, securitykey:0, subuser:0 };
 
 function waitFor(sel, tries){ tries=tries||50; for(var i=0;i<tries;i++){ var e=browser.findElement("css selector",sel); if(e!==null){ return e; } } return null; }
+function waitForXpath(xp, tries){ tries=tries||50; for(var i=0;i<tries;i++){ var e=browser.findElement("xpath",xp); if(e!==null){ return e; } } return null; }
+function waitGone(sel, tries){ tries=tries||30; for(var i=0;i<tries;i++){ if(browser.findElement("css selector",sel)===null){ return true; } } return false; }
 function clickReady(sel){ for(var i=0;i<30;i++){ var e=browser.findElement("css selector",sel); if(e!==null){ try{ e.click(); return true; }catch(err){} } } return false; }
 function typeReady(sel,txt){ for(var i=0;i<30;i++){ var e=browser.findElement("css selector",sel); if(e!==null){ try{ e.sendKeys(txt); return true; }catch(err){} } } return false; }
 
@@ -36,30 +42,39 @@ try {
   browser.navigate("https://midibus.kinxcdn.com/config");
   clickReady("#categoryTab-tab");
 
-  // Step 2: 카테고리 생성 → 자동배포 → 삭제 (완전 멱등 사이클)
+  // Step 2: 카테고리 생성 → 자동배포 → 삭제
   if (waitFor("#allCategories a[title=\"zbx-e2e-test\"]", 10) === null) {
-    clickReady("#menu_media_icon");                          // 미디어 서브메뉴 열기
-    clickReady("#addCategoryBtn");                           // 생성 레이어
+    clickReady("#menu_media_icon"); clickReady("#addCategoryBtn");
     typeReady("#newCategoryName", "zbx-e2e-test");
     clickReady("button[onclick=\"createNewCategory()\"]");
-    browser.navigate("https://midibus.kinxcdn.com/config");  // 오버레이 회피
-    clickReady("#categoryTab-tab");
+    browser.navigate("https://midibus.kinxcdn.com/config"); clickReady("#categoryTab-tab");
   }
-
   var catLink = waitFor("#allCategories a[title=\"zbx-e2e-test\"]");
   if (catLink !== null) {
-    steps.category = 1;
-    catLink.click();
-    var chk = waitFor("#autoDistribution");                  // Step 2a: 채널 자동배포
-    if (chk !== null) {
-      if (chk.getAttribute("checked") !== "true") { clickReady("#autoDistribution"); }
-      clickReady("#categoryConfigSaveBtn");
-      steps.deploy = 1;
-    }
-    clickReady("#deleteCategoryBtn");                        // 정리: 삭제(confirm 자동수락)
+    steps.category = 1; catLink.click();
+    var chk = waitFor("#autoDistribution");
+    if (chk !== null) { if (chk.getAttribute("checked") !== "true") { clickReady("#autoDistribution"); } clickReady("#categoryConfigSaveBtn"); steps.deploy = 1; }
+    clickReady("#deleteCategoryBtn");
   }
 
-  // TODO Step 3~5: 미디어 업로드→확인→삭제→확인 / 보안키 / 보조사용자
+  // Step 3: 미디어 업로드 → 확인 → 삭제 → 확인
+  clickReady("#menu_media_icon");
+  clickReady("#fileUploadBtn_small");
+  typeReady(".qq-upload-button input[type=\"file\"]", "/testdata/beach.mp4");   // 숨은 파일 input
+  clickReady("#trigger-upload");                                                // 업로드 시작
+  var nameDiv = waitForXpath("//div[contains(@id,'mediaName_') and contains(text(),'beach.mp4')]", 120);
+  if (nameDiv !== null) {
+    steps.media = 1;                                                            // 업로드 확인
+    var nid = nameDiv.getAttribute("id");                                       // mediaName_<key>_<cat>
+    if (nid) {
+      var chkId = nid.replace("mediaName_", "mediaCheck_");
+      clickReady("#" + chkId);                                                   // 미디어 선택
+      clickReady("#mediaActionSelector option[value=\"delete\"]");              // 작업선택→삭제(confirm 자동수락)
+      steps.dbg_media_deleted = waitGone("#" + chkId, 30);                       // 삭제 확인
+    }
+  }
+
+  // TODO Step 4~5: 보안키, 보조사용자
 
 } catch (err) {
   steps.error = "" + err;
