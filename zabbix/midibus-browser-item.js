@@ -22,7 +22,7 @@ browser.setSessionTimeout(30000);
 browser.setElementWaitTimeout(10000);
 
 var steps = { login:0, category:0, deploy:0, media:0, securitykey:0, subuser:0 };
-steps.v = "api-v10";
+steps.v = "api-v11";
 var result;
 
 function find(sel, name) {
@@ -142,7 +142,6 @@ try {
   type("#subUserPasswordCheck", "Zbxe2e!234", "비밀번호 확인");
   type("#subUserPhone", "01000000000", "연락처");
   type("#subUserName", "zbx-e2e-subuser", "이름");            // 마지막 keyup -> 전체 검증 -> disabled 해제
-  steps.dbg_save_class = "" + find("#saveSubUserInfoBtn", "save").getAttribute("class");   // 아직 disabled인지 확인
   click("#saveSubUserInfoBtn", "저장");                       // confirm 자동수락
   browser.collectPerfEntries("subuser-create");
   browser.navigate("https://midibus.kinxcdn.com/subUsers");   // 목록 즉시반영 안됨 -> 새로고침
