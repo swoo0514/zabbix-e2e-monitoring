@@ -22,7 +22,7 @@ browser.setSessionTimeout(30000);
 browser.setElementWaitTimeout(10000);
 
 var steps = { login:0, category:0, deploy:0, media:0, securitykey:0, subuser:0 };
-steps.v = "api-v5";
+steps.v = "api-v6";
 var result;
 
 function find(sel, name) {
@@ -53,6 +53,19 @@ function click(sel, name) {              // 존재는 implicit wait, '가림'일
     }
   }
   el.click();   // 마지막 시도(예외 그대로 전파)
+}
+function type(sel, txt, name) {          // 존재는 implicit wait, '아직 상호작용 불가(모달 애니메이션 등)'면 재시도
+  var el = find(sel, name);
+  for (var i = 0; i < 20; i++) {
+    try { el.sendKeys(txt); return; }
+    catch (e) {
+      if (("" + e).indexOf("interactable") < 0) { throw e; }
+      Zabbix.sleep(300);
+      var re = browser.findElement("css selector", sel);
+      if (re !== null) { el = re; }
+    }
+  }
+  el.sendKeys(txt);
 }
 
 try {
@@ -119,11 +132,11 @@ try {
   var subEmail = "zbx-e2e-" + Date.now() + "@e2e-test.com";   // 매번 고유(중복 회피)
   browser.navigate("https://midibus.kinxcdn.com/subUsers");
   click("#editPlaylistBtn", "보조사용자 추가 버튼");            // 모달 열기(개수한도 체크 후)
-  find("#userRoleSelector", "등급 select").sendKeys("사용자");
-  find("#subUserEmail", "이메일").sendKeys(subEmail);
-  find("#subUserPassword", "비밀번호").sendKeys("Zbxe2e!234");
-  find("#subUserPasswordCheck", "비밀번호 확인").sendKeys("Zbxe2e!234");
-  find("#subUserName", "이름").sendKeys("zbx-e2e-subuser");
+  type("#userRoleSelector", "사용자", "등급 select");
+  type("#subUserEmail", subEmail, "이메일");
+  type("#subUserPassword", "Zbxe2e!234", "비밀번호");
+  type("#subUserPasswordCheck", "Zbxe2e!234", "비밀번호 확인");
+  type("#subUserName", "zbx-e2e-subuser", "이름");
   click("#showStatToSubuser_0", "분석권한 없음");
   click("#showSettingsToSubuser_0", "설정권한 없음");
   click("#saveSubUserInfoBtn", "저장");                        // confirm 자동수락
