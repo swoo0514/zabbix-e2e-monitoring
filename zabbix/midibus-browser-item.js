@@ -22,8 +22,8 @@ browser.setSessionTimeout(30000);
 browser.setElementWaitTimeout(10000);
 
 var steps = { login:0, category:0, deploy:0, media:0, securitykey:0, subuser:0 };
-steps.v = "api-v14";
-var FAST = true;   // true=category/media 스킵하고 subuser만 빠르게 반복. 완성되면 false로 되돌릴 것.
+steps.v = "api-v15";
+var FAST = false;   // true=category/media 스킵(subuser 빠른 반복용). 평소 false.
 var result;
 
 function find(sel, name) {
