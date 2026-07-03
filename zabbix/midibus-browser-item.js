@@ -22,7 +22,7 @@ browser.setSessionTimeout(30000);
 browser.setElementWaitTimeout(10000);
 
 var steps = { login:0, category:0, deploy:0, media:0, securitykey:0, subuser:0 };
-steps.v = "api-v16";
+steps.v = "api-v17";
 var FAST = true;    // true=category/media/subuser 스킵, securitykey만 빠르게. 평소 false.
 var result;
 
@@ -170,7 +170,9 @@ try {
   click("#mediaName_19f26bae944f04b4", "fixture 영상 선택");                        // 행 선택 -> 우측 사이드바
   click('button[data-bs-target="#createSecurePlayKeyLayer"]', "보안키 생성 버튼");   // 모달 열기
   Zabbix.sleep(1000);
-  click("#createKeyBtn", "재생 키 생성");                                           // 허용IP 자동(=selenium IP) 그대로
+  click("#quickBtn_1day", "유효시간 1일");                                          // 시간(필수) -> createKeyBtn 활성화
+  type("#tokenSecurity_allowedIP", "1.201.177.127", "허용 IP(VM)");                 // VM IP (재생 요청 IP와 일치해야 재생됨)
+  click("#createKeyBtn", "재생 키 생성");
   click("#applyShareUrlBtn", "배포 URL에 적용");
   browser.collectPerfEntries("securitykey-create");
   var playUrl = "" + find("#link_area", "재생 URL").getText();
