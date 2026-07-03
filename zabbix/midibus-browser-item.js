@@ -22,7 +22,7 @@ browser.setSessionTimeout(30000);
 browser.setElementWaitTimeout(10000);
 
 var steps = { login:0, category:0, deploy:0, media:0, securitykey:0, subuser:0 };
-steps.v = "api-v6";
+steps.v = "api-v7";
 var result;
 
 function find(sel, name) {
@@ -128,23 +128,15 @@ try {
   find("#mediaActionSelector", "media action selector").sendKeys("삭제");   // change -> confirm 자동 수락
   browser.collectPerfEntries("media-delete");
 
-  // Step 5: 보조사용자 추가 -> 확인 -> 삭제 (삭제는 행 내 img onclick=deleteSubUser)
-  var subEmail = "zbx-e2e-" + Date.now() + "@e2e-test.com";   // 매번 고유(중복 회피)
+  // Step 5 진단: 추가 버튼 클릭 후 모달이 실제로 열리나
   browser.navigate("https://midibus.kinxcdn.com/subUsers");
-  click("#editPlaylistBtn", "보조사용자 추가 버튼");            // 모달 열기(개수한도 체크 후)
-  type("#userRoleSelector", "사용자", "등급 select");
-  type("#subUserEmail", subEmail, "이메일");
-  type("#subUserPassword", "Zbxe2e!234", "비밀번호");
-  type("#subUserPasswordCheck", "Zbxe2e!234", "비밀번호 확인");
-  type("#subUserName", "zbx-e2e-subuser", "이름");
-  click("#showStatToSubuser_0", "분석권한 없음");
-  click("#showSettingsToSubuser_0", "설정권한 없음");
-  click("#saveSubUserInfoBtn", "저장");                        // confirm 자동수락
-  browser.collectPerfEntries("subuser-create");
-  var subRow = browser.findElement("xpath", "//td[contains(@aria-describedby,'subUserList_email') and contains(.,'" + subEmail + "')]");
-  if (subRow !== null) { steps.subuser = 1; }                  // 생성 확인
-  var subDel = browser.findElement("xpath", "//tr[contains(.,'" + subEmail + "')]//img[contains(@onclick,'deleteSubUser')]");
-  if (subDel !== null) { subDel.click(); browser.collectPerfEntries("subuser-delete"); }   // 삭제(confirm 자동수락)
+  var addBtn = browser.findElement("css selector", "#editPlaylistBtn");
+  steps.dbg_add_found = (addBtn !== null);
+  if (addBtn !== null) { try { addBtn.click(); steps.dbg_add_click = true; } catch (e) { steps.dbg_add_err = "" + e; } }
+  Zabbix.sleep(2000);
+  steps.dbg_modal_show = (browser.findElement("css selector", ".modal.show") !== null);
+  steps.dbg_role_count = browser.findElements("css selector", "#userRoleSelector").length;
+  try { find("#userRoleSelector", "등급").click(); steps.dbg_role_click = true; } catch (e) { steps.dbg_role_click_err = "" + e; }
 
 } catch (err) {
   steps.err = "" + (err && err.message ? err.message : err);
