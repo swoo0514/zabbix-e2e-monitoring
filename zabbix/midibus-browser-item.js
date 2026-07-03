@@ -22,7 +22,7 @@ browser.setSessionTimeout(30000);
 browser.setElementWaitTimeout(10000);
 
 var steps = { login:0, category:0, deploy:0, media:0, securitykey:0, subuser:0 };
-steps.v = "api-v4";
+steps.v = "api-v5";
 var result;
 
 function find(sel, name) {
@@ -114,6 +114,24 @@ try {
   click("#" + chkId, "media checkbox");
   find("#mediaActionSelector", "media action selector").sendKeys("삭제");   // change -> confirm 자동 수락
   browser.collectPerfEntries("media-delete");
+
+  // Step 5: 보조사용자 추가 -> 확인 -> 삭제 (삭제는 행 내 img onclick=deleteSubUser)
+  var subEmail = "zbx-e2e-" + Date.now() + "@e2e-test.com";   // 매번 고유(중복 회피)
+  browser.navigate("https://midibus.kinxcdn.com/subUsers");
+  click("#editPlaylistBtn", "보조사용자 추가 버튼");            // 모달 열기(개수한도 체크 후)
+  find("#userRoleSelector", "등급 select").sendKeys("사용자");
+  find("#subUserEmail", "이메일").sendKeys(subEmail);
+  find("#subUserPassword", "비밀번호").sendKeys("Zbxe2e!234");
+  find("#subUserPasswordCheck", "비밀번호 확인").sendKeys("Zbxe2e!234");
+  find("#subUserName", "이름").sendKeys("zbx-e2e-subuser");
+  click("#showStatToSubuser_0", "분석권한 없음");
+  click("#showSettingsToSubuser_0", "설정권한 없음");
+  click("#saveSubUserInfoBtn", "저장");                        // confirm 자동수락
+  browser.collectPerfEntries("subuser-create");
+  var subRow = browser.findElement("xpath", "//td[contains(@aria-describedby,'subUserList_email') and contains(.,'" + subEmail + "')]");
+  if (subRow !== null) { steps.subuser = 1; }                  // 생성 확인
+  var subDel = browser.findElement("xpath", "//tr[contains(.,'" + subEmail + "')]//img[contains(@onclick,'deleteSubUser')]");
+  if (subDel !== null) { subDel.click(); browser.collectPerfEntries("subuser-delete"); }   // 삭제(confirm 자동수락)
 
 } catch (err) {
   steps.err = "" + (err && err.message ? err.message : err);
