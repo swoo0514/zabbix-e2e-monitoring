@@ -22,7 +22,7 @@ browser.setSessionTimeout(30000);
 browser.setElementWaitTimeout(10000);
 
 var steps = { login:0, category:0, deploy:0, media:0, securitykey:0, subuser:0 };
-steps.v = "api-v11";
+steps.v = "api-v12";
 var result;
 
 function find(sel, name) {
@@ -128,7 +128,7 @@ try {
   find("#mediaActionSelector", "media action selector").sendKeys("삭제");   // change -> confirm 자동 수락
   browser.collectPerfEntries("media-delete");
 
-  // Step 5: 보조사용자 추가 -> 확인 -> 삭제
+  // Step 5: 보조사용자 추가 -> 권한 변경 -> 삭제 (요구 스펙 4.3)
   var subEmail = "zbx-e2e-" + Date.now() + "@e2e-test.com";   // 매번 고유
   browser.navigate("https://midibus.kinxcdn.com/subUsers");
   click("#editPlaylistBtn", "보조사용자 추가");
@@ -144,9 +144,20 @@ try {
   type("#subUserName", "zbx-e2e-subuser", "이름");            // 마지막 keyup -> 전체 검증 -> disabled 해제
   click("#saveSubUserInfoBtn", "저장");                       // confirm 자동수락
   browser.collectPerfEntries("subuser-create");
-  browser.navigate("https://midibus.kinxcdn.com/subUsers");   // 목록 즉시반영 안됨 -> 새로고침
-  var subRow = browser.findElement("xpath", "//td[contains(@aria-describedby,'subUserList_email') and contains(.,'" + subEmail + "')]");
-  if (subRow !== null) { steps.subuser = 1; }                 // 생성 확인
+  // --- 권한 변경: 새로고침 -> 행 클릭(편집) -> 분석 조회 권한 없음->모든 -> 저장 ---
+  browser.navigate("https://midibus.kinxcdn.com/subUsers");
+  browser.findElement("xpath", "//tr[contains(.,'" + subEmail + "')]//td[contains(@aria-describedby,'subUserList_email')]").click();   // 행 클릭 -> 편집 모달
+  Zabbix.sleep(1500);
+  click("#showStatToSubuser_1", "분석권한=모든 카테고리와 채널");   // 권한 변경
+  find("#subUserName", "이름").clear();
+  type("#subUserName", "zbx-e2e-subuser", "이름 재입력");           // keyup -> 재검증(저장 활성화)
+  click("#saveSubUserInfoBtn", "저장");
+  browser.collectPerfEntries("subuser-perm");
+  // --- 변경 확인: 새로고침 후 분석 조회 권한 셀이 '모든...'인지 ---
+  browser.navigate("https://midibus.kinxcdn.com/subUsers");
+  var statCell = browser.findElement("xpath", "//tr[contains(.,'" + subEmail + "')]//td[contains(@aria-describedby,'subUserList_statAnalysis')]");
+  if (statCell !== null && ("" + statCell.getText()).indexOf("모든") >= 0) { steps.subuser = 1; }   // 추가+권한변경 확인
+  // --- 삭제 ---
   var subDel = browser.findElement("xpath", "//tr[contains(.,'" + subEmail + "')]//img[contains(@onclick,'deleteSubUser')]");
   if (subDel !== null) { subDel.click(); browser.collectPerfEntries("subuser-delete"); }   // 삭제(confirm 자동수락)
 
