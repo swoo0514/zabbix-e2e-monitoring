@@ -22,8 +22,7 @@ browser.setSessionTimeout(30000);
 browser.setElementWaitTimeout(10000);
 
 var steps = { login:0, category:0, deploy:0, media:0, securitykey:0, subuser:0 };
-steps.v = "api-v18";
-var FAST = false;   // true=category/media/subuser 스킵(빠른 반복용). 평소 false.
+var FAST = false;   // true=category/media/subuser 스킵(개발 중 특정 스텝 빠른 반복용). 평소 false.
 var result;
 
 function find(sel, name) {
@@ -176,14 +175,13 @@ try {
   click("#applyShareUrlBtn", "배포 URL에 적용");
   browser.collectPerfEntries("securitykey-create");
   var playUrl = "" + find("#link_area", "재생 URL").getText();
-  steps.dbg_playurl = (playUrl.indexOf("key=") >= 0);
-  if (playUrl.indexOf("key=") >= 0) {
-    browser.navigate(playUrl);                                                     // 보안키 적용 URL로 이동
-    var playBtn = browser.findElement("css selector", ".jw-icon-display");
-    steps.dbg_player = (playBtn !== null);
-    if (playBtn !== null) { try { playBtn.click(); } catch (e) {} }                // 재생
-    steps.dbg_playing = (browser.findElement("css selector", ".jw-state-playing") !== null);
-    if (steps.dbg_player) { steps.securitykey = 1; }                               // 보안키 생성 + 재생 페이지 정상
+  if (playUrl.indexOf("key=") >= 0) {                                             // 보안키 적용된 재생 URL 확보
+    browser.navigate(playUrl);
+    var playBtn = browser.findElement("css selector", ".jw-icon-display");        // JW 플레이어
+    if (playBtn !== null) {
+      try { playBtn.click(); } catch (e) {}                                        // 재생
+      steps.securitykey = 1;                                                        // 보안키 생성 + 재생 확인
+    }
     browser.collectPerfEntries("securitykey-play");
   }
 
