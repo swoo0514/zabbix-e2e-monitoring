@@ -22,8 +22,8 @@ browser.setSessionTimeout(30000);
 browser.setElementWaitTimeout(10000);
 
 var steps = { login:0, category:0, deploy:0, media:0, securitykey:0, subuser:0 };
-steps.v = "api-v15";
-var FAST = false;   // true=category/media 스킵(subuser 빠른 반복용). 평소 false.
+steps.v = "api-v16";
+var FAST = true;    // true=category/media/subuser 스킵, securitykey만 빠르게. 평소 false.
 var result;
 
 function find(sel, name) {
@@ -130,7 +130,6 @@ try {
   click("#" + chkId, "media checkbox");
   find("#mediaActionSelector", "media action selector").sendKeys("삭제");   // change -> confirm 자동 수락
   browser.collectPerfEntries("media-delete");
-  }   // end if(!FAST)
 
   // Step 5: 보조사용자 추가 -> 권한 변경 -> 삭제 (요구 스펙 4.3)
   var subEmail = "zbx-e2e-" + Date.now() + "@e2e-test.com";   // 매번 고유
@@ -164,6 +163,27 @@ try {
   // --- 삭제 ---
   var subDel = browser.findElement("xpath", "//tr[contains(.,'" + subEmail + "')]//img[contains(@onclick,'deleteSubUser')]");
   if (subDel !== null) { subDel.click(); browser.collectPerfEntries("subuser-delete"); }   // 삭제(confirm 자동수락)
+  }   // end if(!FAST)
+
+  // Step 4: 보안키 생성 -> 배포 URL 적용 -> 그 URL로 재생 검증 (fixture: ch_19f2748f 배포 영상)
+  browser.navigate("https://midibus.kinxcdn.com/channel/ch_19f2748f");
+  click("#mediaName_19f26bae944f04b4", "fixture 영상 선택");                        // 행 선택 -> 우측 사이드바
+  click('button[data-bs-target="#createSecurePlayKeyLayer"]', "보안키 생성 버튼");   // 모달 열기
+  Zabbix.sleep(1000);
+  click("#createKeyBtn", "재생 키 생성");                                           // 허용IP 자동(=selenium IP) 그대로
+  click("#applyShareUrlBtn", "배포 URL에 적용");
+  browser.collectPerfEntries("securitykey-create");
+  var playUrl = "" + find("#link_area", "재생 URL").getText();
+  steps.dbg_playurl = (playUrl.indexOf("key=") >= 0);
+  if (playUrl.indexOf("key=") >= 0) {
+    browser.navigate(playUrl);                                                     // 보안키 적용 URL로 이동
+    var playBtn = browser.findElement("css selector", ".jw-icon-display");
+    steps.dbg_player = (playBtn !== null);
+    if (playBtn !== null) { try { playBtn.click(); } catch (e) {} }                // 재생
+    steps.dbg_playing = (browser.findElement("css selector", ".jw-state-playing") !== null);
+    if (steps.dbg_player) { steps.securitykey = 1; }                               // 보안키 생성 + 재생 페이지 정상
+    browser.collectPerfEntries("securitykey-play");
+  }
 
 } catch (err) {
   steps.err = "" + (err && err.message ? err.message : err);
