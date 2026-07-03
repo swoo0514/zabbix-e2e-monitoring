@@ -22,7 +22,8 @@ browser.setSessionTimeout(30000);
 browser.setElementWaitTimeout(10000);
 
 var steps = { login:0, category:0, deploy:0, media:0, securitykey:0, subuser:0 };
-steps.v = "api-v13";
+steps.v = "api-v14";
+var FAST = true;   // true=category/media 스킵하고 subuser만 빠르게 반복. 완성되면 false로 되돌릴 것.
 var result;
 
 function find(sel, name) {
@@ -53,7 +54,7 @@ function click(sel, name) {              // 존재는 implicit wait, '가림'일
       if (re !== null) { el = re; }
     }
   }
-  el.click();   // 마지막 시도(예외 그대로 전파)
+  try { el.click(); } catch (ef) { throw Error(name + ": " + ef); }   // 마지막 시도 실패 시 이름 포함
 }
 function type(sel, txt, name) {          // 존재는 implicit wait, '아직 상호작용 불가(모달 애니메이션 등)'면 재시도
   var el = find(sel, name);
@@ -66,7 +67,7 @@ function type(sel, txt, name) {          // 존재는 implicit wait, '아직 상
       if (re !== null) { el = re; }
     }
   }
-  el.sendKeys(txt);
+  try { el.sendKeys(txt); } catch (ef) { throw Error(name + ": " + ef); }
 }
 
 try {
@@ -81,6 +82,7 @@ try {
   steps.login = 1;
   browser.collectPerfEntries("login");
 
+  if (!FAST) {   // category/media (FAST=true면 스킵 - subuser 빠른 반복용)
   // Step 2: 카테고리 생성 -> 자동배포 -> 삭제
   browser.navigate("https://midibus.kinxcdn.com/config");
   click("#categoryTab-tab", "category tab");
@@ -128,6 +130,7 @@ try {
   click("#" + chkId, "media checkbox");
   find("#mediaActionSelector", "media action selector").sendKeys("삭제");   // change -> confirm 자동 수락
   browser.collectPerfEntries("media-delete");
+  }   // end if(!FAST)
 
   // Step 5: 보조사용자 추가 -> 권한 변경 -> 삭제 (요구 스펙 4.3)
   var subEmail = "zbx-e2e-" + Date.now() + "@e2e-test.com";   // 매번 고유
