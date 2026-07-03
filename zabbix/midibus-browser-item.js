@@ -1,86 +1,125 @@
 /*
- * midibus Browser Item - E2E scenario (Zabbix 7.0 Browser item Script)
+ * midibus Browser Item - E2E scenario (Zabbix 7.0 Browser item)
+ * -----------------------------------------------------------------------------
  * Host: midibus / key: browser.midibus.e2e / Type: Browser / Timeout 300s
  * Params: username={$MIDIBUS.USER} password={$MIDIBUS.PASS} url=https://midibus.kinxcdn.com/login
- * 선행: selenium 컨테이너에 /testdata/beach.mp4 (compose 마운트)
- * 배포: 웹 에디터 붙여넣기가 깨지므로 zabbix/update-item-script.sh (API push) 사용 권장.
+ * 선행: selenium 컨테이너 /testdata/beach.mp4 (compose 마운트)
+ * 배포: zabbix/update-item-script.sh (API push, 웹 에디터 우회)
+ *
+ * 정석 API 사용 (레퍼런스: manual/config/items/preprocessing/javascript/browser_item_javascript_objects):
+ *  - setElementWaitTimeout : findElement 암묵적 대기 (수동 폴링 루프 제거)
+ *  - getAlert().accept()    : 네이티브 confirm 처리 (unhandledPromptBehavior=ignore와 페어링)
+ *  - collectPerfEntries(mark): 스텝별 성능 마크
+ *  - setError / BrowserError: 구조화된 에러
+ *  - getProperty            : 체크박스 실시간 상태
  */
-var params = JSON.parse(value);
 var opts = Browser.chromeOptions();
-opts.capabilities.alwaysMatch.unhandledPromptBehavior = "accept";
+opts.capabilities.alwaysMatch.unhandledPromptBehavior = "ignore";   // 프롬프트를 스크립트가 직접 처리(getAlert)
 var browser = new Browser(opts);
-browser.setScreenSize(1920, 1080);   // 반응형 접힘/뷰포트 밖 방지: 데스크톱 해상도 강제
+browser.setScreenSize(1920, 1080);
+browser.setSessionTimeout(30000);       // 페이지 로드 타임아웃
+browser.setElementWaitTimeout(10000);   // findElement 암묵적 대기
+
 var steps = { login:0, category:0, deploy:0, media:0, securitykey:0, subuser:0 };
-steps.v = "s3dbg12";
+steps.v = "api-v1";
+var result;
 
-function waitFor(sel, tries){ tries=tries||50; for(var i=0;i<tries;i++){ var e=browser.findElement("css selector",sel); if(e!==null){ return e; } } return null; }
-function waitForXpath(xp, tries){ tries=tries||50; for(var i=0;i<tries;i++){ var e=browser.findElement("xpath",xp); if(e!==null){ return e; } } return null; }
-function waitGone(sel, tries){ tries=tries||30; for(var i=0;i<tries;i++){ if(browser.findElement("css selector",sel)===null){ return true; } } return false; }
-function clickReady(sel){ for(var i=0;i<30;i++){ var e=browser.findElement("css selector",sel); if(e!==null){ try{ e.click(); return true; }catch(err){} } } return false; }
-function typeReady(sel,txt){ for(var i=0;i<30;i++){ var e=browser.findElement("css selector",sel); if(e!==null){ try{ e.sendKeys(txt); return true; }catch(err){} } } return false; }
-
-try {
-  browser.navigate(params.url);
-  typeReady("#username", params.username);
-  typeReady("#password", params.password);
-  clickReady("#midibusLoginBtn");
-  if (waitFor("#accountDropdownBtn") !== null) { steps.login = 1; }
-
-  browser.navigate("https://midibus.kinxcdn.com/config");
-  clickReady("#categoryTab-tab");
-
-  if (waitFor('#allCategories a[title="zbx-e2e-test"]', 10) === null) {
-    clickReady("#menu_media_icon");
-    clickReady("#addCategoryBtn");
-    typeReady("#newCategoryName", "zbx-e2e-test");
-    clickReady('button[onclick="createNewCategory()"]');
-    browser.navigate("https://midibus.kinxcdn.com/config");
-    clickReady("#categoryTab-tab");
+function find(sel, name) {
+  var el = browser.findElement("css selector", sel);
+  if (el === null) { throw Error("not found: " + name + " (" + sel + ")"); }
+  return el;
+}
+function findX(xp, name) {
+  var el = browser.findElement("xpath", xp);
+  if (el === null) { throw Error("not found: " + name); }
+  return el;
+}
+function gone(sel, waitMs) {             // 짧은 대기로 '부재' 확인
+  browser.setElementWaitTimeout(waitMs || 2000);
+  var el = browser.findElement("css selector", sel);
+  browser.setElementWaitTimeout(10000);
+  return el === null;
+}
+function acceptAlert() {                 // 네이티브 confirm 수락(뜰 때까지 재시도)
+  for (var i = 0; i < 10; i++) {
+    var a = browser.getAlert();
+    if (a !== null && a.text !== null) { a.accept(); return true; }
+    Zabbix.sleep(500);
   }
-  var catLink = waitFor('#allCategories a[title="zbx-e2e-test"]');
-  if (catLink !== null) {
-    steps.category = 1;
-    catLink.click();
-    var chk = waitFor("#autoDistribution");
-    if (chk !== null) {
-      if (chk.getAttribute("checked") !== "true") { clickReady("#autoDistribution"); }
-      clickReady("#categoryConfigSaveBtn");
-      steps.deploy = 1;
-    }
-    clickReady("#deleteCategoryBtn");
-  }
-
-  // Step 3: 미디어 업로드 -> 완료대기 -> 목록 확인 -> 삭제 -> 삭제 확인
-  steps.dbg_m_enter = clickReady(".fileUploadBtn");                             // 업로드 패널 열기
-  waitFor("#trigger-upload", 30);
-  steps.dbg_m_file = typeReady('.qq-upload-button input[type="file"]', "/testdata/beach.mp4");
-  steps.dbg_m_trigger = clickReady("#trigger-upload");                          // 업로드 시작
-  steps.dbg_upload_success = (waitFor(".qq-upload-list li.qq-upload-success", 200) !== null);  // 전송+처리 완료 대기
-  browser.navigate("https://midibus.kinxcdn.com/media");                        // 미디어 목록 화면으로 이동(URL 추정)
-  var nameDiv = waitForXpath("//div[contains(@id,'mediaName_') and contains(text(),'beach.mp4')]", 120);  // 목록에서 확인
-  steps.dbg_m_found = (nameDiv !== null);
-  if (nameDiv !== null) {
-    steps.media = 1;                                                            // 업로드+정보확인
-    var nid = nameDiv.getAttribute("id");                                       // mediaName_<key>
-    var chkId = nid.replace("mediaName_", "mediaCheck_");
-    steps.dbg_chk_clicked = clickReady("#" + chkId);                            // 미디어 체크박스 선택
-    steps.dbg_sel_delete = typeReady("#mediaActionSelector", "삭제");           // 셀렉트에 '삭제' 입력 -> change -> confirm 자동수락
-    steps.dbg_media_deleted = false;                                            // 서버 삭제 처리에 시간 걸림 ->
-    for (var r = 0; r < 6 && steps.dbg_media_deleted !== true; r++) {           // 새로고침 반복하며 그 미디어가 사라질 때까지 확인
-      browser.navigate("https://midibus.kinxcdn.com/media");
-      if (waitFor("#" + chkId, 15) === null) { steps.dbg_media_deleted = true; }
-    }
-  }
-} catch (err) {
-  steps.error = "" + err;
-  try { steps.screenshot = browser.getScreenshot(); } catch (e2) {}
+  return false;
 }
 
-var order = ["login","category","deploy","media","securitykey","subuser"];
-var failed = 0;
-for (var k=0;k<order.length;k++){ if (steps[order[k]] !== 1) { failed = k+1; break; } }
-browser.collectPerfEntries();
-var result = browser.getResult();
-result.steps = steps;
-result.failed_step = failed;
-return JSON.stringify(result);
+try {
+  var params = JSON.parse(value);
+
+  // Step 1: 로그인
+  browser.navigate(params.url);
+  find("#username", "username").sendKeys(params.username);
+  find("#password", "password").sendKeys(params.password);
+  find("#midibusLoginBtn", "login button").click();
+  find("#accountDropdownBtn", "login success marker");
+  steps.login = 1;
+  browser.collectPerfEntries("login");
+
+  // Step 2: 카테고리 생성 -> 자동배포 -> 삭제
+  browser.navigate("https://midibus.kinxcdn.com/config");
+  find("#categoryTab-tab", "category tab").click();
+
+  if (gone('#allCategories a[title="zbx-e2e-test"]', 3000)) {   // 없으면 생성
+    find("#menu_media_icon", "media menu").click();
+    find("#addCategoryBtn", "add category button").click();
+    var nameInput = find("#newCategoryName", "category name input");
+    nameInput.clear();
+    nameInput.sendKeys("zbx-e2e-test");
+    find('button[onclick="createNewCategory()"]', "create category button").click();
+    browser.navigate("https://midibus.kinxcdn.com/config");
+    find("#categoryTab-tab", "category tab (after create)").click();
+  }
+
+  find('#allCategories a[title="zbx-e2e-test"]', "category link").click();
+  steps.category = 1;
+  browser.collectPerfEntries("category-create");
+
+  var chk = find("#autoDistribution", "auto distribution checkbox");
+  var checked = chk.getProperty("checked");
+  if (checked !== true && checked !== "true") { chk.click(); }
+  find("#categoryConfigSaveBtn", "category save button").click();
+  steps.deploy = 1;
+  browser.collectPerfEntries("category-deploy");
+
+  find("#deleteCategoryBtn", "delete category button").click();
+  acceptAlert();
+  browser.collectPerfEntries("category-delete");
+
+  // Step 3: 미디어 업로드 -> 확인 -> 삭제
+  find(".fileUploadBtn", "media upload button").click();
+  find('.qq-upload-button input[type="file"]', "file input").sendKeys("/testdata/beach.mp4");
+  find("#trigger-upload", "upload start button").click();
+
+  browser.setElementWaitTimeout(60000);                        // 업로드+서버처리 대기(길게)
+  find(".qq-upload-list li.qq-upload-success", "upload success");
+  browser.setElementWaitTimeout(10000);
+  browser.collectPerfEntries("media-upload");
+
+  browser.navigate("https://midibus.kinxcdn.com/media");       // 미디어 목록
+  var nameDiv = findX("//div[contains(@id,'mediaName_') and contains(text(),'beach.mp4')]", "uploaded media in list");
+  steps.media = 1;
+
+  var chkId = nameDiv.getAttribute("id").replace("mediaName_", "mediaCheck_");
+  find("#" + chkId, "media checkbox").click();
+  find("#mediaActionSelector", "media action selector").sendKeys("삭제");   // change -> confirm
+  acceptAlert();
+  browser.collectPerfEntries("media-delete");
+
+} catch (err) {
+  if (!(err instanceof BrowserError)) { browser.setError(err.message); }
+  try { steps.screenshot = browser.getScreenshot(); } catch (e) {}
+} finally {
+  var order = ["login", "category", "deploy", "media", "securitykey", "subuser"];
+  var failed = 0;
+  for (var k = 0; k < order.length; k++) { if (steps[order[k]] !== 1) { failed = k + 1; break; } }
+  result = browser.getResult();
+  result.steps = steps;
+  result.failed_step = failed;
+  return JSON.stringify(result);
+}
