@@ -22,7 +22,7 @@ browser.setSessionTimeout(30000);
 browser.setElementWaitTimeout(10000);
 
 var steps = { login:0, category:0, deploy:0, media:0, securitykey:0, subuser:0 };
-steps.v = "api-v7";
+steps.v = "api-v8";
 var result;
 
 function find(sel, name) {
@@ -128,15 +128,26 @@ try {
   find("#mediaActionSelector", "media action selector").sendKeys("삭제");   // change -> confirm 자동 수락
   browser.collectPerfEntries("media-delete");
 
-  // Step 5 진단: 추가 버튼 클릭 후 모달이 실제로 열리나
+  // Step 5: 보조사용자 추가 -> 확인 -> 삭제
+  var subEmail = "zbx-e2e-" + Date.now() + "@e2e-test.com";   // 매번 고유
   browser.navigate("https://midibus.kinxcdn.com/subUsers");
-  var addBtn = browser.findElement("css selector", "#editPlaylistBtn");
-  steps.dbg_add_found = (addBtn !== null);
-  if (addBtn !== null) { try { addBtn.click(); steps.dbg_add_click = true; } catch (e) { steps.dbg_add_err = "" + e; } }
-  Zabbix.sleep(2000);
-  steps.dbg_modal_show = (browser.findElement("css selector", ".modal.show") !== null);
-  steps.dbg_role_count = browser.findElements("css selector", "#userRoleSelector").length;
-  try { find("#userRoleSelector", "등급").click(); steps.dbg_role_click = true; } catch (e) { steps.dbg_role_click_err = "" + e; }
+  click("#editPlaylistBtn", "보조사용자 추가");
+  Zabbix.sleep(1500);                                          // 모달 렌더 대기
+  click("#userRoleSelector", "등급 select");                  // 이 select은 sendKeys 거부 -> 클릭으로 선택
+  click("#userRoleSelector option[value=\"USER\"]", "등급=사용자");
+  type("#subUserEmail", subEmail, "이메일");
+  type("#subUserPassword", "Zbxe2e!234", "비밀번호");
+  type("#subUserPasswordCheck", "Zbxe2e!234", "비밀번호 확인");
+  type("#subUserName", "zbx-e2e-subuser", "이름");
+  click("#showStatToSubuser_0", "분석권한 없음");
+  click("#showSettingsToSubuser_0", "설정권한 없음");
+  click("#saveSubUserInfoBtn", "저장");                       // confirm 자동수락
+  browser.collectPerfEntries("subuser-create");
+  browser.navigate("https://midibus.kinxcdn.com/subUsers");   // 목록 즉시반영 안됨 -> 새로고침
+  var subRow = browser.findElement("xpath", "//td[contains(@aria-describedby,'subUserList_email') and contains(.,'" + subEmail + "')]");
+  if (subRow !== null) { steps.subuser = 1; }                 // 생성 확인
+  var subDel = browser.findElement("xpath", "//tr[contains(.,'" + subEmail + "')]//img[contains(@onclick,'deleteSubUser')]");
+  if (subDel !== null) { subDel.click(); browser.collectPerfEntries("subuser-delete"); }   // 삭제(confirm 자동수락)
 
 } catch (err) {
   steps.err = "" + (err && err.message ? err.message : err);
