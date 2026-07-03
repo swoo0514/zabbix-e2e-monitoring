@@ -17,12 +17,12 @@
 var opts = Browser.chromeOptions();
 opts.capabilities.alwaysMatch.unhandledPromptBehavior = "accept";
 var browser = new Browser(opts);
-browser.setScreenSize(1920, 1080);
+browser.setScreenSize(1920, 1600);   // 하단 고정 푸터(#midibusFooter)가 저장 버튼을 덮음 -> 뷰포트 높여 버튼을 푸터 밖으로
 browser.setSessionTimeout(30000);
 browser.setElementWaitTimeout(10000);
 
 var steps = { login:0, category:0, deploy:0, media:0, securitykey:0, subuser:0 };
-steps.v = "api-v3";
+steps.v = "api-v4";
 var result;
 
 function find(sel, name) {
