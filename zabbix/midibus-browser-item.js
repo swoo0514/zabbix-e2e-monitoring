@@ -22,8 +22,8 @@ browser.setSessionTimeout(30000);
 browser.setElementWaitTimeout(10000);
 
 var steps = { login:0, category:0, deploy:0, media:0, securitykey:0, subuser:0 };
-steps.v = "api-v17";
-var FAST = true;    // true=category/media/subuser 스킵, securitykey만 빠르게. 평소 false.
+steps.v = "api-v18";
+var FAST = false;   // true=category/media/subuser 스킵(빠른 반복용). 평소 false.
 var result;
 
 function find(sel, name) {
