@@ -22,7 +22,7 @@ browser.setSessionTimeout(30000);
 browser.setElementWaitTimeout(10000);
 
 var steps = { login:0, category:0, deploy:0, media:0, securitykey:0, subuser:0 };
-steps.v = "api-v8";
+steps.v = "api-v9";
 var result;
 
 function find(sel, name) {
@@ -141,13 +141,12 @@ try {
   type("#subUserName", "zbx-e2e-subuser", "이름");
   click("#showStatToSubuser_0", "분석권한 없음");
   click("#showSettingsToSubuser_0", "설정권한 없음");
-  click("#saveSubUserInfoBtn", "저장");                       // confirm 자동수락
-  browser.collectPerfEntries("subuser-create");
-  browser.navigate("https://midibus.kinxcdn.com/subUsers");   // 목록 즉시반영 안됨 -> 새로고침
-  var subRow = browser.findElement("xpath", "//td[contains(@aria-describedby,'subUserList_email') and contains(.,'" + subEmail + "')]");
-  if (subRow !== null) { steps.subuser = 1; }                 // 생성 확인
-  var subDel = browser.findElement("xpath", "//tr[contains(.,'" + subEmail + "')]//img[contains(@onclick,'deleteSubUser')]");
-  if (subDel !== null) { subDel.click(); browser.collectPerfEntries("subuser-delete"); }   // 삭제(confirm 자동수락)
+  // 진단: 저장 전 폼 상태 (등급 값 실제 세팅? 저장버튼 disabled? 필드 경고?)
+  steps.dbg_role_val = "" + find("#userRoleSelector", "role").getProperty("value");
+  steps.dbg_save_class = "" + find("#saveSubUserInfoBtn", "save").getAttribute("class");
+  steps.dbg_email_warn = "" + browser.findElement("css selector", "#email_warning").getText();
+  steps.dbg_pw_warn = "" + browser.findElement("css selector", "#password_warning").getText();
+  steps.dbg_name_warn = "" + browser.findElement("css selector", "#userName_warning").getText();
 
 } catch (err) {
   steps.err = "" + (err && err.message ? err.message : err);
