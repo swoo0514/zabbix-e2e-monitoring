@@ -22,7 +22,7 @@ browser.setSessionTimeout(30000);
 browser.setElementWaitTimeout(10000);
 
 var steps = { login:0, category:0, deploy:0, media:0, securitykey:0, subuser:0 };
-steps.v = "api-v12";
+steps.v = "api-v13";
 var result;
 
 function find(sel, name) {
@@ -46,7 +46,8 @@ function click(sel, name) {              // 존재는 implicit wait, '가림'일
   for (var i = 0; i < 15; i++) {
     try { el.click(); return; }
     catch (e) {
-      if (("" + e).indexOf("intercepted") < 0) { throw e; }   // 가림 외 에러는 즉시 던짐
+      var msg = "" + e;
+      if (msg.indexOf("intercepted") < 0 && msg.indexOf("interactable") < 0) { throw e; }   // 가림/미준비 외 에러는 즉시
       Zabbix.sleep(300);
       var re = browser.findElement("css selector", sel);
       if (re !== null) { el = re; }
