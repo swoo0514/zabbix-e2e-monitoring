@@ -8,20 +8,20 @@
  *
  * 정석 API 사용 (레퍼런스: manual/config/items/preprocessing/javascript/browser_item_javascript_objects):
  *  - setElementWaitTimeout : findElement 암묵적 대기 (수동 폴링 루프 제거)
- *  - getAlert().accept()    : 네이티브 confirm 처리 (unhandledPromptBehavior=ignore와 페어링)
+ *  - unhandledPromptBehavior=accept : 네이티브 confirm 자동 수락 (표준 W3C capability)
  *  - collectPerfEntries(mark): 스텝별 성능 마크
  *  - setError / BrowserError: 구조화된 에러
  *  - getProperty            : 체크박스 실시간 상태
  */
 var opts = Browser.chromeOptions();
-opts.capabilities.alwaysMatch.unhandledPromptBehavior = "ignore";   // 프롬프트를 스크립트가 직접 처리(getAlert)
+opts.capabilities.alwaysMatch.unhandledPromptBehavior = "accept";   // 표준 W3C capability: confirm/alert 자동 수락(navigate 많은 흐름에 안전)
 var browser = new Browser(opts);
 browser.setScreenSize(1920, 1080);
 browser.setSessionTimeout(30000);       // 페이지 로드 타임아웃
 browser.setElementWaitTimeout(10000);   // findElement 암묵적 대기
 
 var steps = { login:0, category:0, deploy:0, media:0, securitykey:0, subuser:0 };
-steps.v = "api-v1";
+steps.v = "api-v2";
 var result;
 
 function find(sel, name) {
@@ -40,15 +40,6 @@ function gone(sel, waitMs) {             // 짧은 대기로 '부재' 확인
   browser.setElementWaitTimeout(10000);
   return el === null;
 }
-function acceptAlert() {                 // 네이티브 confirm 수락(뜰 때까지 재시도)
-  for (var i = 0; i < 10; i++) {
-    var a = browser.getAlert();
-    if (a !== null && a.text !== null) { a.accept(); return true; }
-    Zabbix.sleep(500);
-  }
-  return false;
-}
-
 try {
   var params = JSON.parse(value);
 
@@ -87,8 +78,7 @@ try {
   steps.deploy = 1;
   browser.collectPerfEntries("category-deploy");
 
-  find("#deleteCategoryBtn", "delete category button").click();
-  acceptAlert();
+  find("#deleteCategoryBtn", "delete category button").click();   // confirm 자동 수락(accept)
   browser.collectPerfEntries("category-delete");
 
   // Step 3: 미디어 업로드 -> 확인 -> 삭제
@@ -107,13 +97,12 @@ try {
 
   var chkId = nameDiv.getAttribute("id").replace("mediaName_", "mediaCheck_");
   find("#" + chkId, "media checkbox").click();
-  find("#mediaActionSelector", "media action selector").sendKeys("삭제");   // change -> confirm
-  acceptAlert();
+  find("#mediaActionSelector", "media action selector").sendKeys("삭제");   // change -> confirm 자동 수락
   browser.collectPerfEntries("media-delete");
 
 } catch (err) {
+  steps.err = "" + (err && err.message ? err.message : err);   // 에러 메시지 노출(진단)
   if (!(err instanceof BrowserError)) { browser.setError(err.message); }
-  try { steps.screenshot = browser.getScreenshot(); } catch (e) {}
 } finally {
   var order = ["login", "category", "deploy", "media", "securitykey", "subuser"];
   var failed = 0;
