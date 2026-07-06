@@ -25,12 +25,19 @@ var steps = { login:0, category:0, deploy:0, media:0, securitykey:0, subuser:0 }
 var FAST = false;   // true=category/media/subuser 스킵(개발 중 특정 스텝 빠른 반복용). 평소 false.
 var result;
 
+var crumb = "";     // 마지막으로 시도한 서브액션(요소 접근 name) — 실패 지점 특정용(find/findX 진입 시 갱신)
+var stepSec = {};   // 스텝 블록별 벽시계 소요(초). perf 마크는 "페이지 로드" 시간이라 스텝 시간이 아님(#3에서 확인)
+var lapT = Date.now();
+function lap(k) { stepSec[k] = Math.round((Date.now() - lapT) / 100) / 10; lapT = Date.now(); }
+
 function find(sel, name) {
+  crumb = name;                          // click()/type()도 find()를 거치므로 여기 한 곳이면 전부 커버
   var el = browser.findElement("css selector", sel);
   if (el === null) { throw Error("not found: " + name + " (" + sel + ")"); }
   return el;
 }
 function findX(xp, name) {
+  crumb = name;
   var el = browser.findElement("xpath", xp);
   if (el === null) { throw Error("not found: " + name); }
   return el;
@@ -80,6 +87,7 @@ try {
   find("#accountDropdownBtn", "login success marker");
   steps.login = 1;
   browser.collectPerfEntries("login");
+  lap("login");
 
   if (!FAST) {   // category/media (FAST=true면 스킵 - subuser 빠른 반복용)
   // Step 2: 카테고리 생성 -> 자동배포 -> 삭제
@@ -110,6 +118,7 @@ try {
 
   click("#deleteCategoryBtn", "delete category button");   // confirm 자동 수락
   browser.collectPerfEntries("category-delete");
+  lap("category");   // Step 2 전체(생성+자동배포+삭제) — deploy는 이 블록에 포함
 
   // Step 3: 미디어 업로드 -> 확인 -> 삭제
   click(".fileUploadBtn", "media upload button");
@@ -129,6 +138,7 @@ try {
   click("#" + chkId, "media checkbox");
   find("#mediaActionSelector", "media action selector").sendKeys("삭제");   // change -> confirm 자동 수락
   browser.collectPerfEntries("media-delete");
+  lap("media");      // Step 3 전체(업로드+인코딩 대기+확인+삭제)
 
   // Step 5: 보조사용자 추가 -> 권한 변경 -> 삭제 (요구 스펙 4.3)
   var subEmail = "zbx-e2e-" + Date.now() + "@e2e-test.com";   // 매번 고유
@@ -162,6 +172,7 @@ try {
   // --- 삭제 ---
   var subDel = browser.findElement("xpath", "//tr[contains(.,'" + subEmail + "')]//img[contains(@onclick,'deleteSubUser')]");
   if (subDel !== null) { subDel.click(); browser.collectPerfEntries("subuser-delete"); }   // 삭제(confirm 자동수락)
+  lap("subuser");    // Step 5 전체(추가+권한변경+확인+삭제)
   }   // end if(!FAST)
 
   // Step 4: 보안키 생성 -> 배포 URL 적용 -> 그 URL로 재생 검증 (fixture: ch_19f2748f 배포 영상)
@@ -184,9 +195,17 @@ try {
     }
     browser.collectPerfEntries("securitykey-play");
   }
+  lap("securitykey");   // Step 4 전체(키 생성+URL 적용+재생 검증)
 
 } catch (err) {
   steps.err = "" + (err && err.message ? err.message : err);
+  steps.err_at = crumb;                    // 마지막으로 시도한 서브액션 = 실패 지점
+  var ml = steps.err.toLowerCase();        // 에러 분류: 셀렉터 드리프트 / 타이밍 flaky / 인프라 / 기능 장애 후보
+  steps.err_class =
+      ml.indexOf("not found") >= 0 ? "selector"
+    : (ml.indexOf("intercepted") >= 0 || ml.indexOf("interactable") >= 0) ? "timing"
+    : (ml.indexOf("session") >= 0 || ml.indexOf("webdriver") >= 0 || ml.indexOf("resolve") >= 0 || ml.indexOf("timeout") >= 0) ? "webdriver"
+    : "logic";
   if (!(err instanceof BrowserError)) { browser.setError(err.message); }
 } finally {
   var order = ["login", "category", "deploy", "media", "securitykey", "subuser"];
@@ -195,5 +214,6 @@ try {
   result = browser.getResult();
   result.steps = steps;
   result.failed_step = failed;
+  result.step_seconds = stepSec;   // 스텝 블록별 벽시계(초) — dependent로 추출해 이상치 판정 예정
   return JSON.stringify(result);
 }
