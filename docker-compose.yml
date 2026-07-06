@@ -92,6 +92,14 @@ services:
     environment:
       ZBX_SERVER_HOST: zabbix-server           # Passive 수집 시 이 서버의 접속을 허용.
       ZBX_HOSTNAME: "Zabbix server"            # Zabbix 기본 호스트명과 매칭(UI 기본 호스트 인터페이스를 이 컨테이너로 지정 예정).
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro  # Agent2 Docker 플러그인(컨테이너별 CPU/메모리 LLD)용.
+        # ★ 보안 트레이드오프: :ro는 소켓 "파일"의 쓰기만 막고 Docker API 호출은 제한하지 못함
+        #   → 소켓 접근 = 사실상 호스트 root 동급. 단독 실습 VM + agent2 외부 미노출이라 수용.
+        #   실무 대안: docker-socket-proxy(GET만 허용)·cAdvisor 등 전용 exporter.
+    group_add:
+      - "988"                                  # 호스트 docker 그룹 GID(stat -c '%g' /var/run/docker.sock).
+                                               # agent2는 비특권 zabbix 유저로 돌므로 이 그룹을 부여해야 소켓 접근 가능.
     depends_on:
       zabbix-server:
         condition: service_started
