@@ -71,4 +71,4 @@ for KEY in burst.direct burst.kafka; do
 done
 
 api user.logout '{}' "$TOKEN" >/dev/null 2>&1 || true
-echo "✅ 프로비저닝 완료. 이제 --profile act1 로 zbx-sender 띄우고 버스트."
+echo "✅ 프로비저닝 완료. 버스트: docker exec zbx-agent2 zabbix_sender -z zabbix-server -i <입력파일>"

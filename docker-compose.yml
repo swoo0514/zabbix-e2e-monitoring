@@ -148,18 +148,11 @@ services:
       - zabbix-net
     # 외부 포트 미공개(요구 2.3: 8080 외 차단). Zabbix Server가 내부에서 http://nginx/ 로 접근.
 
-  # ---------------------------------------------------------------------------
-  # 7) [ACT1 부하/유실 실험] zabbix_sender - 버스트 발생기
-  #    profiles로 격리 → 맨 `docker compose up -d`엔 안 뜸. 실험 시 `--profile act1 up`.
-  #    공식 sender 컨테이너 사용(VM 바이너리 의존 제거). docker exec로 rate 제어 버스트.
-  # ---------------------------------------------------------------------------
-  zbx-sender:
-    image: zabbix/zabbix-sender:alpine-7.0.27  # 서버와 동일 패치. 태그 부재 시 alpine-7.0-latest로(드리프트 기록).
-    container_name: zbx-sender
-    profiles: ["act1"]                         # ★ 이 프로파일일 때만 기동 → 검증스택 무영향
-    entrypoint: ["sleep", "infinity"]          # 살려두고 `docker exec zbx-sender zabbix_sender ...`로 버스트
-    networks:
-      - zabbix-net                             # 짧은 이름으로 zabbix-net 조인 → zabbix-server:10051 도달
+  # [ACT1 부하/유실 실험] 버스트 발생기:
+  #   공식 zabbix/zabbix-sender 독립 이미지는 없음 → 이미 떠 있는 zbx-agent2에 zabbix_sender가
+  #   번들(/usr/bin/zabbix_sender)돼 있어 그걸로 쏜다. 별도 서비스 불필요.
+  #     docker exec zbx-agent2 zabbix_sender -z zabbix-server -i <입력파일>
+  #   sender의 -s(호스트)로 대상(burst-lab)을 지정하므로 발신 컨테이너는 무관.
 
 # -----------------------------------------------------------------------------
 volumes:
