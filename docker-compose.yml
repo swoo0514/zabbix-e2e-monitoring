@@ -49,6 +49,16 @@ services:
       # --- Browser Item 필수 설정 (공식 확인: 둘 다 Zabbix 7.0.0부터) ---
       ZBX_STARTBROWSERPOLLERS: 1               # 브라우저 폴러 인스턴스 수. 0이면 Browser Item 동작 안 함.
       ZBX_WEBDRIVERURL: http://selenium:4444   # WebDriver 엔드포인트. selenium 서비스(4444)를 가리킴.
+      # --- [ACT1 부하/유실 실험] 캐시 유실 재현용 실험 통제 (평소엔 기본값 = 검증스택 무변경) ---
+      #  무엇: 히스토리 쓰기 캐시 크기. 공식 Range 128K-2G / Default 16M
+      #        (raw conf: git.zabbix.com .../conf/zabbix_server.conf release/7.0)
+      #  판단: .env 미설정이면 16M(공식 기본) 그대로. Act1 실험 시에만 .env에서 128K(문서상 최소)로 축소해
+      #        랩 스케일 버스트로 오버플로 도달. 실험 통제이지 생산 사이징 권고가 아님.
+      #  대안/기각: DB를 직접 스로틀(cgroup/tc) → 재현·롤백 복잡. 캐시 env 축소가 가장 깨끗하고 되돌리기 쉬움.
+      ZBX_HISTORYCACHESIZE: ${ZBX_HISTORYCACHESIZE:-16M}
+      #  무엇: history syncer(DB 배수) 인스턴스 수. 공식 Range 1-100 / Default 4
+      #  판단: 미설정이면 4. Act1에서만 1로 낮춰 배수를 느리게 → 유실 임계를 선명화. 최소값이라 유효.
+      ZBX_STARTDBSYNCERS: ${ZBX_STARTDBSYNCERS:-4}
     depends_on:
       postgres:
         condition: service_healthy             # DB가 healthy가 된 뒤에 기동(스키마 초기화 안정성).
@@ -137,6 +147,19 @@ services:
     networks:
       - zabbix-net
     # 외부 포트 미공개(요구 2.3: 8080 외 차단). Zabbix Server가 내부에서 http://nginx/ 로 접근.
+
+  # ---------------------------------------------------------------------------
+  # 7) [ACT1 부하/유실 실험] zabbix_sender - 버스트 발생기
+  #    profiles로 격리 → 맨 `docker compose up -d`엔 안 뜸. 실험 시 `--profile act1 up`.
+  #    공식 sender 컨테이너 사용(VM 바이너리 의존 제거). docker exec로 rate 제어 버스트.
+  # ---------------------------------------------------------------------------
+  zbx-sender:
+    image: zabbix/zabbix-sender:alpine-7.0.27  # 서버와 동일 패치. 태그 부재 시 alpine-7.0-latest로(드리프트 기록).
+    container_name: zbx-sender
+    profiles: ["act1"]                         # ★ 이 프로파일일 때만 기동 → 검증스택 무영향
+    entrypoint: ["sleep", "infinity"]          # 살려두고 `docker exec zbx-sender zabbix_sender ...`로 버스트
+    networks:
+      - zabbix-net                             # 짧은 이름으로 zabbix-net 조인 → zabbix-server:10051 도달
 
 # -----------------------------------------------------------------------------
 volumes:
