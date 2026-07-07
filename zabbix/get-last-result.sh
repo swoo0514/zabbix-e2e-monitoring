@@ -11,13 +11,14 @@
 #   raw   : 반환 JSON 전체
 #
 # 옵션(환경변수): ZBX_URL(기본 http://localhost:8080/api_jsonrpc.php), ZBX_USER(기본 Admin)
+#                ZBX_KEY(기본 browser.midibus.e2e — 온디맨드 확인: ZBX_KEY=browser.midibus.ondemand)
 # =============================================================================
 set -euo pipefail
 
 ZBX_URL="${ZBX_URL:-http://localhost:8080/api_jsonrpc.php}"
 ZBX_USER="${ZBX_USER:-Admin}"
 : "${ZBX_PASS:?ZBX_PASS 환경변수를 설정하세요. 예) ZBX_PASS='...' bash zabbix/get-last-result.sh steps}"
-KEY="browser.midibus.e2e"
+KEY="${ZBX_KEY:-browser.midibus.e2e}"
 MODE="${1:-steps}"
 command -v jq >/dev/null || { echo "❌ jq 필요: sudo apt install -y jq"; exit 1; }
 
@@ -30,7 +31,7 @@ api() { # $1=params(json) [$2=token]
 TOKEN=$(api "$(jq -n --arg u "$ZBX_USER" --arg p "$ZBX_PASS" '{jsonrpc:"2.0",method:"user.login",params:{username:$u,password:$p},id:1}')" | jq -r '.result // empty')
 [ -n "$TOKEN" ] || { echo "❌ 로그인 실패 (계정/URL 확인)"; exit 1; }
 
-ITEMID=$(api "$(jq -n --arg k "$KEY" '{jsonrpc:"2.0",method:"item.get",params:{output:["itemid"],search:{key_:$k}},id:1}')" "$TOKEN" | jq -r '.result[0].itemid // empty')
+ITEMID=$(api "$(jq -n --arg k "$KEY" '{jsonrpc:"2.0",method:"item.get",params:{output:["itemid"],filter:{key_:$k}},id:1}')" "$TOKEN" | jq -r '.result[0].itemid // empty')
 [ -n "$ITEMID" ] || { echo "❌ 아이템($KEY) 못 찾음"; exit 1; }
 
 VAL=$(api "$(jq -n --arg id "$ITEMID" '{jsonrpc:"2.0",method:"history.get",params:{history:4,itemids:$id,sortfield:"clock",sortorder:"DESC",limit:1},id:1}')" "$TOKEN" | jq -r '.result[0].value // empty')
