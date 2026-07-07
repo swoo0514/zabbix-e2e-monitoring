@@ -145,3 +145,28 @@
 ### 배운 점
 - 알림은 **이력**(그때), 화면은 **상태**(지금) — 같은 필드가 달라 보이면 먼저 "그 사이 무슨 일이 있었나"를 본다.
 - 지표를 노출할 땐 값보다 **라벨의 오독 가능성**을 먼저 점검한다(`step=` → `login_ok=`).
+
+---
+
+## #8. "Maintenance 중 SLA가 안 깎인다" — 문서에 없는 동작을 소스 코드까지 추적
+
+- **발생일:** 2026-07-07 (Maintenance 검증 중)
+- **증상:** 점검 창에서 fault injection을 하자 Problems에는 문제가 생성됐는데(suppressed, 눈 아이콘) **SLA Downtime이 증가하지 않음.** 당초 예상("Maintenance는 알림만 끄고 SLA는 별도")과 반대.
+
+### 원인 분석
+- 판별 관찰로 사슬의 끊긴 지점을 특정: 억제 중 **Services의 해당 서비스가 OK(초록) 유지** → SLA가 아니라 **서비스 층이 suppressed 문제를 무시**하는 것.
+- 공식 문서 8곳+(Maintenance/Suppression/Services/Service tree/SLA/SLA report/What's new/프론트엔드)를 확인했으나 이 규칙의 명시 조항 없음. **소스 코드에서 확정** — `src/zabbix_server/service/service_manager.c`(release/7.0), 함수 `db_update_services()`(2588행~)의 심각도 집계 루프, **2696~2697행** (원문 그대로, 주석 없음):
+  ```c
+  if (NULL != event->maintenanceids)
+      continue;
+  ```
+  `maintenanceids`가 있는 이벤트(= maintenance로 suppressed)는 심각도 비교에 도달하기 전에 건너뛰어진다 — suppressed 문제가 서비스 상태에 반영되지 않는 이유.
+
+### 해결(정리)
+- 사전 계획 작업 → **Maintenance 하나로 알림·SLA 둘 다 보호**됨(별도 SLA 제외 불필요).
+- SLA **Excluded downtimes**는 소급 제외용(미리 창을 못 걸었던 기간)으로 역할 재정의.
+- 소스가 준 보너스: 억제 해제 시 서비스 재계산(`ZBX_FLAG_SERVICE_RECALCULATE_SUPPRESS`) → **창이 닫혔는데 문제가 살아 있으면 그때부터 SLA가 깎이기 시작** — 작업창을 열어두고 잊으면 안 되는 이유.
+
+### 배운 점
+- **"내가 못 찾음" ≠ "문서에 없음" ≠ "근거 없음".** 부재 주장은 확인 범위를 명시하고, 문서가 침묵하면 다음 원천은 소스 코드다.
+- 동작 규명은 층을 갈라 판별 관찰 하나로 좁힌다(문제→서비스→SLA 중 어디서 끊기나 = 억제 중 서비스 색 하나로 판정).
