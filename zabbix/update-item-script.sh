@@ -18,7 +18,7 @@ ZBX_USER="${ZBX_USER:-Admin}"
 : "${ZBX_PASS:?ZBX_PASS 환경변수를 설정하세요. 예) ZBX_PASS='...' bash zabbix/update-item-script.sh}"
 KEYS="${ZBX_KEYS:-browser.midibus.e2e}"
 DIR="$(cd "$(dirname "$0")" && pwd)"
-SCRIPT_FILE="$DIR/midibus-browser-item.js"
+SCRIPT_FILE="${ZBX_SCRIPT:-$DIR/midibus-browser-item.js}"   # ZBX_SCRIPT로 임시본(fault injection) 배포 가능
 
 [ -f "$SCRIPT_FILE" ] || { echo "❌ 스크립트 파일 없음: $SCRIPT_FILE"; exit 1; }
 command -v jq >/dev/null || { echo "❌ jq 필요: sudo apt install -y jq"; exit 1; }
