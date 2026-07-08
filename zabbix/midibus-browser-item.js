@@ -3,6 +3,7 @@
  * -----------------------------------------------------------------------------
  * Host: midibus / key: browser.midibus.e2e (+ browser.midibus.ondemand) / Type: Browser / Timeout 300s
  * Params: username={$MIDIBUS.USER} password={$MIDIBUS.PASS} url=https://midibus.kinxcdn.com/login
+ *         allowed_ip={$VM.EGRESS_IP}  (Secret 매크로 — 보안키 허용 IP. 비면 IP 제한 없음, 있으면 그 IP로 제한)
  *         only=<block[,block]>  (선택. 예: "securitykey", "media,subuser". 미설정=전체 실행.
  *                                login은 항상 실행. "deploy"는 "category"의 별칭.
  *                                운영 아이템에는 절대 설정하지 않는다 - 온디맨드 전용)
@@ -257,7 +258,7 @@ try {
     click('button[data-bs-target="#createSecurePlayKeyLayer"]', "보안키 생성 버튼");   // 모달 열기
     Zabbix.sleep(1000);
     click("#quickBtn_1day", "유효시간 1일");                                          // 시간(필수) -> createKeyBtn 활성화
-    type("#tokenSecurity_allowedIP", "1.201.177.127", "허용 IP(VM)");                 // VM IP (재생 요청 IP와 일치해야 재생됨)
+    type("#tokenSecurity_allowedIP", "" + (params.allowed_ip || ""), "허용 IP(VM)");   // Secret 매크로 {$VM.EGRESS_IP}에서 주입(하드코딩 제거). 비면 무제한, 있으면 그 IP로 제한(재생 요청 IP와 일치해야 재생됨)
     click("#createKeyBtn", "재생 키 생성");
     click("#applyShareUrlBtn", "배포 URL에 적용");
     browser.collectPerfEntries("securitykey-create");
