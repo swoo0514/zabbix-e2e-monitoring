@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<zabbix_export>
+    <version>7.0</version>
+    <host_groups>
+        <host_group>
+            <uuid>b8bf46f6dc4c4abb973e6ee8c3168d8f</uuid>
+            <name>E2E Targets</name>
+        </host_group>
+    </host_groups>
+    <hosts>
+        <host>
+            <host>nginx-sample</host>
+            <name>nginx-sample</name>
+            <description>nginx 샘플앱 - Web Scenario 가용성 대상</description>
+            <templates>
+                <template>
+                    <name>Nginx by HTTP</name>
+                </template>
+            </templates>
+            <groups>
+                <group>
+                    <name>E2E Targets</name>
+                </group>
+            </groups>
+            <interfaces>
+                <interface>
+                    <useip>NO</useip>
+                    <dns>nginx</dns>
+                    <interface_ref>if1</interface_ref>
+                </interface>
+            </interfaces>
+            <items>
+                <item>
+                    <name>Browser pipeline check (nginx)</name>
+                    <type>BROWSER</type>
+                    <key>browser.pipeline.check</key>
+                    <value_type>TEXT</value_type>
+                    <trends>0</trends>
+                    <params>var browser = new Browser(Browser.chromeOptions());                                                                                                                                                                               
+try {                                                                                                                                                                                                                             
+  browser.navigate(&quot;http://nginx/&quot;);                                                                                                                                                                                              
+  browser.collectPerfEntries();                                                                                                                                                                                                   } catch (err) {                                                                                                                                                                                                                   
+  throw &quot;navigate failed: &quot; + err;                                                                                                                                                                                                
+}                                                                                                                                                                                                                                 
+return JSON.stringify(browser.getResult());</params>
+                </item>
+            </items>
+            <httptests>
+                <httptest>
+                    <name>nginx-availability</name>
+                    <steps>
+                        <step>
+                            <name>main</name>
+                            <url>http://nginx/</url>
+                            <follow_redirects>NO</follow_redirects>
+                            <required>Welcome to nginx</required>
+                            <status_codes>200</status_codes>
+                        </step>
+                        <step>
+                            <name>health</name>
+                            <url>http://nginx/health</url>
+                            <follow_redirects>NO</follow_redirects>
+                            <required>OK</required>
+                            <status_codes>200</status_codes>
+                        </step>
+                        <step>
+                            <name>status</name>
+                            <url>http://nginx/status</url>
+                            <follow_redirects>NO</follow_redirects>
+                            <status_codes>200, 404</status_codes>
+                        </step>
+                    </steps>
+                </httptest>
+            </httptests>
+            <macros>
+                <macro>
+                    <macro>{$NGINX.STUB_STATUS.HOST}</macro>
+                    <value>nginx</value>
+                    <description>기본값이 &lt;SET STUB_STATUS HOST&gt; 플레이스홀더 — 필수 설정. HTTP agent 아이템이 http://{HOST}:{PORT}/{PATH}로 URL을 조립한다.</description>
+                </macro>
+                <macro>
+                    <macro>{$NGINX.STUB_STATUS.PATH}</macro>
+                    <value>status</value>
+                    <description>템플릿 기본 basic_status, 우리 conf는 location = /status — 우리 쪽에 맞춤</description>
+                </macro>
+            </macros>
+            <inventory_mode>DISABLED</inventory_mode>
+        </host>
+    </hosts>
+    <triggers>
+        <trigger>
+            <expression>last(/nginx-sample/web.test.rspcode[nginx-availability,main])&lt;&gt;200</expression>
+            <name>Bad HTTP status (main): {HOST.NAME}</name>
+            <priority>HIGH</priority>
+            <tags>
+                <tag>
+                    <tag>check</tag>
+                    <value>http-status</value>
+                </tag>
+                <tag>
+                    <tag>service</tag>
+                    <value>nginx</value>
+                </tag>
+            </tags>
+        </trigger>
+        <trigger>
+            <expression>last(/nginx-sample/web.test.time[nginx-availability,main,resp])&gt;3</expression>
+            <name>Response time &gt; 3s (main): {HOST.NAME}</name>
+            <priority>WARNING</priority>
+            <tags>
+                <tag>
+                    <tag>check</tag>
+                    <value>response-time</value>
+                </tag>
+                <tag>
+                    <tag>service</tag>
+                    <value>nginx</value>
+                </tag>
+            </tags>
+        </trigger>
+        <trigger>
+            <expression>last(/nginx-sample/web.test.fail[nginx-availability])&lt;&gt;0</expression>
+            <name>Web scenario failed: {HOST.NAME}</name>
+            <priority>HIGH</priority>
+            <tags>
+                <tag>
+                    <tag>check</tag>
+                    <value>web-scenario</value>
+                </tag>
+                <tag>
+                    <tag>service</tag>
+                    <value>nginx</value>
+                </tag>
+            </tags>
+        </trigger>
+    </triggers>
+</zabbix_export>

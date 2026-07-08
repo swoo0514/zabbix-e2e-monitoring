@@ -1,0 +1,1295 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<zabbix_export>
+    <version>7.0</version>
+    <host_groups>
+        <host_group>
+            <uuid>b8bf46f6dc4c4abb973e6ee8c3168d8f</uuid>
+            <name>E2E Targets</name>
+        </host_group>
+    </host_groups>
+    <hosts>
+        <host>
+            <host>midibus</host>
+            <name>midibus</name>
+            <description>midibus 웹서비스 — Browser Item E2E 모니터링 대상</description>
+            <groups>
+                <group>
+                    <name>E2E Targets</name>
+                </group>
+            </groups>
+            <items>
+                <item>
+                    <name>midibus E2E scenario</name>
+                    <type>BROWSER</type>
+                    <key>browser.midibus.e2e</key>
+                    <delay>10m</delay>
+                    <value_type>TEXT</value_type>
+                    <trends>0</trends>
+                    <params>/*
+ * midibus Browser Item - E2E scenario (Zabbix 7.0 Browser item)
+ * -----------------------------------------------------------------------------
+ * Host: midibus / key: browser.midibus.e2e (+ browser.midibus.ondemand) / Type: Browser / Timeout 300s
+ * Params: username={$MIDIBUS.USER} password={$MIDIBUS.PASS} url=https://midibus.kinxcdn.com/login
+ *         allowed_ip={$VM.EGRESS_IP}  (Secret 매크로 — 보안키 허용 IP. 비면 IP 제한 없음, 있으면 그 IP로 제한)
+ *         only=&lt;block[,block]&gt;  (선택. 예: &quot;securitykey&quot;, &quot;media,subuser&quot;. 미설정=전체 실행.
+ *                                login은 항상 실행. &quot;deploy&quot;는 &quot;category&quot;의 별칭.
+ *                                운영 아이템에는 절대 설정하지 않는다 - 온디맨드 전용)
+ * 선행: selenium 컨테이너 /testdata/beach.mp4 (compose 마운트)
+ * 배포: zabbix/update-item-script.sh (API push. ZBX_KEYS로 대상 키 지정 가능)
+ *
+ * 구조:
+ *  - 스텝 격리: login(치명, 실패 시 전체 중단) 외 4개 블록(category/media/subuser/securitykey)은
+ *    runBlock()의 개별 try/catch로 격리 - 한 블록이 죽어도 나머지는 계속 검사된다.
+ *    블록별 에러는 result.errors.&lt;block&gt;={at,class,msg}, 최초 에러만 steps.err*로 승격(기존 dependent 호환).
+ *  - 셀렉터 폴백: find/findX의 sel에 배열을 주면 후보를 라운드로빈(2s 프로브, 총예산 10s)으로 시도.
+ *    1순위가 아닌 후보로 성공하면 healed에 기록(= UI 드리프트 신호). healed_count는 항상 반환(0 포함).
+ *    주의: 커스텀 implicit wait 구간(업로드 60s)에는 배열 셀렉터 금지(프로브가 예산을 덮어씀).
+ *  - steps 값: 1=성공, 0=실패, 2=스킵(only로 제외됨. last()=0 트리거에 안 걸리는 값).
+ *
+ * 정석 API (레퍼런스: manual/config/items/preprocessing/javascript/browser_item_javascript_objects):
+ *  - setElementWaitTimeout : findElement 암묵적 대기(요소 '존재' 대기 -&gt; 수동 폴링 제거)
+ *  - unhandledPromptBehavior=accept : 네이티브 confirm 자동 수락(표준 W3C capability)
+ *  - collectPerfEntries(mark): 스텝별 성능 마크
+ *  - setError / BrowserError: 구조화된 에러
+ *  - getProperty            : 체크박스 실시간 상태
+ * 주의: implicit wait는 '가림(click intercepted)'은 못 푼다 -&gt; click()에서 가림일 때만 재시도.
+ */
+var WAIT_MAIN = 10000;   // 기본 implicit wait
+var WAIT_PROBE = 2000;   // 폴백 배열 프로브용 짧은 wait
+
+var opts = Browser.chromeOptions();
+opts.capabilities.alwaysMatch.unhandledPromptBehavior = &quot;accept&quot;;
+var browser = new Browser(opts);
+browser.setScreenSize(1920, 1600);   // 하단 고정 푸터(#midibusFooter)가 저장 버튼을 덮음 -&gt; 뷰포트 높여 버튼을 푸터 밖으로
+browser.setSessionTimeout(30000);
+browser.setElementWaitTimeout(WAIT_MAIN);
+
+var steps = { login:0, category:0, deploy:0, media:0, securitykey:0, subuser:0 };
+var result;
+
+var crumb = &quot;&quot;;       // 마지막으로 시도한 서브액션(요소 접근 name) — 실패 지점 특정용(find/findX 진입 시 갱신)
+var foundSel = &quot;&quot;;    // 마지막 find()가 실제로 매치시킨 셀렉터(배열 폴백 대응 — click/type 재시도의 re-find용)
+var errors = {};      // 블록별 에러 상세 { at, class, msg }
+var healed = {};      // self-heal 기록: name -&gt; 성공한 비1순위 셀렉터
+var healedCount = 0;
+var only = null;      // null=전체 실행 / 배열=해당 블록만 (login은 항상)
+var stepSec = {};     // 스텝 블록별 벽시계 소요(초). perf 마크는 &quot;페이지 로드&quot; 시간이라 스텝 시간이 아님(#3에서 확인)
+var lapT = Date.now();
+function lap(k) { stepSec[k] = Math.round((Date.now() - lapT) / 100) / 10; lapT = Date.now(); }
+
+function classify(msg) {   // 에러 분류: 셀렉터 드리프트 / 타이밍 flaky / 인프라 / 기능 장애 후보
+  var ml = msg.toLowerCase();
+  return ml.indexOf(&quot;not found&quot;) &gt;= 0 ? &quot;selector&quot;
+    : (ml.indexOf(&quot;intercepted&quot;) &gt;= 0 || ml.indexOf(&quot;interactable&quot;) &gt;= 0) ? &quot;timing&quot;
+    : (ml.indexOf(&quot;session&quot;) &gt;= 0 || ml.indexOf(&quot;webdriver&quot;) &gt;= 0 || ml.indexOf(&quot;resolve&quot;) &gt;= 0 || ml.indexOf(&quot;timeout&quot;) &gt;= 0) ? &quot;webdriver&quot;
+    : &quot;logic&quot;;
+}
+
+function findAny(by, sel, name) {
+  crumb = name;
+  if (typeof sel === &quot;string&quot;) {           // 단일 셀렉터: 기존 동작 그대로 (implicit wait = WAIT_MAIN)
+    foundSel = sel;
+    var el = browser.findElement(by, sel);
+    if (el === null) { throw Error(&quot;not found: &quot; + name + &quot; (&quot; + sel + &quot;)&quot;); }
+    return el;
+  }
+  // 배열: 라운드로빈 프로브. 총예산 WAIT_MAIN 안에서 후보들을 WAIT_PROBE씩 반복 순회.
+  // 1순위를 매 바퀴 다시 시도하므로 &quot;느린 페이지 + 멀쩡한 1순위&quot;가 가짜 heal로 기록될 확률을 낮춘다.
+  var deadline = Date.now() + WAIT_MAIN;
+  browser.setElementWaitTimeout(WAIT_PROBE);
+  try {
+    do {
+      for (var i = 0; i &lt; sel.length; i++) {
+        var e2 = browser.findElement(by, sel[i]);
+        if (e2 !== null) {
+          foundSel = sel[i];
+          if (i &gt; 0) { healed[name] = sel[i]; healedCount++; }   // 폴백으로 성공 = 드리프트 신호
+          return e2;
+        }
+      }
+    } while (Date.now() &lt; deadline);
+  } finally { browser.setElementWaitTimeout(WAIT_MAIN); }
+  throw Error(&quot;not found: &quot; + name + &quot; (&quot; + sel.join(&quot; | &quot;) + &quot;)&quot;);
+}
+function find(sel, name)  { return findAny(&quot;css selector&quot;, sel, name); }
+function findX(xp, name)  { return findAny(&quot;xpath&quot;, xp, name); }
+
+function gone(sel, waitMs) {             // 짧은 대기로 '부재' 확인
+  browser.setElementWaitTimeout(waitMs || 2000);
+  var el = browser.findElement(&quot;css selector&quot;, sel);
+  browser.setElementWaitTimeout(WAIT_MAIN);
+  return el === null;
+}
+function click(sel, name) {              // 존재는 implicit wait, '가림/미준비'일 때만 재시도
+  var el = find(sel, name);
+  var rsel = foundSel;                   // 실제 매치된 셀렉터(배열이었을 수 있으므로 re-find는 이걸로)
+  for (var i = 0; i &lt; 15; i++) {
+    try { el.click(); return; }
+    catch (e) {
+      var msg = &quot;&quot; + e;
+      if (msg.indexOf(&quot;intercepted&quot;) &lt; 0 &amp;&amp; msg.indexOf(&quot;interactable&quot;) &lt; 0) { throw e; }   // 가림/미준비 외 에러는 즉시
+      Zabbix.sleep(300);
+      var re = browser.findElement(&quot;css selector&quot;, rsel);
+      if (re !== null) { el = re; }
+    }
+  }
+  try { el.click(); } catch (ef) { throw Error(name + &quot;: &quot; + ef); }   // 마지막 시도 실패 시 이름 포함
+}
+function type(sel, txt, name) {          // 존재는 implicit wait, '아직 상호작용 불가(모달 애니메이션 등)'면 재시도
+  var el = find(sel, name);
+  var rsel = foundSel;
+  for (var i = 0; i &lt; 20; i++) {
+    try { el.sendKeys(txt); return; }
+    catch (e) {
+      if ((&quot;&quot; + e).indexOf(&quot;interactable&quot;) &lt; 0) { throw e; }
+      Zabbix.sleep(300);
+      var re = browser.findElement(&quot;css selector&quot;, rsel);
+      if (re !== null) { el = re; }
+    }
+  }
+  try { el.sendKeys(txt); } catch (ef) { throw Error(name + &quot;: &quot; + ef); }
+}
+
+function wants(b) { return only === null || only.indexOf(b) &gt;= 0; }
+
+function runBlock(name, fn) {            // 블록 격리: only 게이트 + 개별 try/catch
+  if (!wants(name)) {
+    steps[name] = 2;                     // 2=스킵 (0/1과 구분, last()=0 트리거에 안 걸림)
+    if (name === &quot;category&quot;) { steps.deploy = 2; }
+    return;
+  }
+  try { fn(); }
+  catch (e) {
+    var m = &quot;&quot; + (e &amp;&amp; e.message ? e.message : e);
+    errors[name] = { at: crumb, class: classify(m), msg: m };
+    lap(name);                                    // 실패한 블록의 소요시간도 기록
+    browser.setElementWaitTimeout(WAIT_MAIN);     // 블록 내에서 올린 wait(업로드 60s)이 남지 않게 복원
+  }
+}
+
+try {
+  var params = JSON.parse(value);
+  if (params.only) {                     // 온디맨드 부분 실행 (운영 아이템엔 미설정)
+    only = (&quot;&quot; + params.only).split(&quot;,&quot;);
+    for (var oi = 0; oi &lt; only.length; oi++) {
+      only[oi] = only[oi].replace(/^\s+|\s+$/g, &quot;&quot;);
+      if (only[oi] === &quot;deploy&quot;) { only[oi] = &quot;category&quot;; }   // deploy는 category 블록 내부
+    }
+  }
+
+  // Step 1: 로그인 — 치명 블록(세션 전제). 실패 시 바깥 catch로 전체 중단.
+  browser.navigate(params.url);
+  find(&quot;#username&quot;, &quot;username&quot;).sendKeys(params.username);
+  find(&quot;#password&quot;, &quot;password&quot;).sendKeys(params.password);
+  click(&quot;#midibusLoginBtn&quot;, &quot;login button&quot;);
+  find(&quot;#accountDropdownBtn&quot;, &quot;login success marker&quot;);
+  steps.login = 1;
+  browser.collectPerfEntries(&quot;login&quot;);
+  lap(&quot;login&quot;);
+
+  // Step 2: 카테고리 생성 -&gt; 자동배포 -&gt; 삭제
+  runBlock(&quot;category&quot;, function () {
+    browser.navigate(&quot;https://midibus.kinxcdn.com/config&quot;);
+    click(&quot;#categoryTab-tab&quot;, &quot;category tab&quot;);
+
+    if (gone('#allCategories a[title=&quot;zbx-e2e-test&quot;]', 3000)) {
+      click(&quot;#menu_media_icon&quot;, &quot;media menu&quot;);
+      click(&quot;#addCategoryBtn&quot;, &quot;add category button&quot;);
+      var nameInput = find(&quot;#newCategoryName&quot;, &quot;category name input&quot;);
+      nameInput.clear();
+      nameInput.sendKeys(&quot;zbx-e2e-test&quot;);
+      click('button[onclick=&quot;createNewCategory()&quot;]', &quot;create category button&quot;);
+      browser.navigate(&quot;https://midibus.kinxcdn.com/config&quot;);
+      click(&quot;#categoryTab-tab&quot;, &quot;category tab (after create)&quot;);
+    }
+
+    click('#allCategories a[title=&quot;zbx-e2e-test&quot;]', &quot;category link&quot;);
+    steps.category = 1;
+    browser.collectPerfEntries(&quot;category-create&quot;);
+
+    var chk = find(&quot;#autoDistribution&quot;, &quot;auto distribution checkbox&quot;);
+    var checked = chk.getProperty(&quot;checked&quot;);
+    if (checked !== true &amp;&amp; checked !== &quot;true&quot;) { click(&quot;#autoDistribution&quot;, &quot;auto distribution checkbox&quot;); }
+    click(&quot;#categoryConfigSaveBtn&quot;, &quot;category save button&quot;);
+    steps.deploy = 1;
+    browser.collectPerfEntries(&quot;category-deploy&quot;);
+
+    click(&quot;#deleteCategoryBtn&quot;, &quot;delete category button&quot;);   // confirm 자동 수락
+    browser.collectPerfEntries(&quot;category-delete&quot;);
+    lap(&quot;category&quot;);   // Step 2 전체(생성+자동배포+삭제) — deploy는 이 블록에 포함
+  });
+
+  // Step 3: 미디어 업로드 -&gt; 확인 -&gt; 삭제
+  runBlock(&quot;media&quot;, function () {
+    browser.navigate(&quot;https://midibus.kinxcdn.com/config&quot;);   // 격리: 블록 시작 상태를 명시적으로 리셋
+    click(&quot;.fileUploadBtn&quot;, &quot;media upload button&quot;);
+    find('.qq-upload-button input[type=&quot;file&quot;]', &quot;file input&quot;).sendKeys(&quot;/testdata/beach.mp4&quot;);
+    click(&quot;#trigger-upload&quot;, &quot;upload start button&quot;);
+
+    browser.setElementWaitTimeout(60000);                     // 업로드+인코딩 대기 (이 구간엔 배열 셀렉터 금지)
+    find(&quot;.qq-upload-list li.qq-upload-success&quot;, &quot;upload success&quot;);
+    browser.setElementWaitTimeout(WAIT_MAIN);
+    browser.collectPerfEntries(&quot;media-upload&quot;);
+
+    browser.navigate(&quot;https://midibus.kinxcdn.com/media&quot;);
+    var nameDiv = findX(&quot;//div[contains(@id,'mediaName_') and contains(text(),'beach.mp4')]&quot;, &quot;uploaded media in list&quot;);
+    steps.media = 1;
+
+    var chkId = nameDiv.getAttribute(&quot;id&quot;).replace(&quot;mediaName_&quot;, &quot;mediaCheck_&quot;);
+    click(&quot;#&quot; + chkId, &quot;media checkbox&quot;);
+    find(&quot;#mediaActionSelector&quot;, &quot;media action selector&quot;).sendKeys(&quot;삭제&quot;);   // change -&gt; confirm 자동 수락
+    browser.collectPerfEntries(&quot;media-delete&quot;);
+    lap(&quot;media&quot;);      // Step 3 전체(업로드+인코딩 대기+확인+삭제)
+  });
+
+  // Step 5: 보조사용자 추가 -&gt; 권한 변경 -&gt; 삭제 (요구 스펙 4.3)
+  runBlock(&quot;subuser&quot;, function () {
+    var subEmail = &quot;zbx-e2e-&quot; + Date.now() + &quot;@e2e-test.com&quot;;   // 매번 고유
+    browser.navigate(&quot;https://midibus.kinxcdn.com/subUsers&quot;);
+    click(&quot;#editPlaylistBtn&quot;, &quot;보조사용자 추가&quot;);
+    Zabbix.sleep(1500);                                          // 모달 렌더 대기
+    click(&quot;#userRoleSelector&quot;, &quot;등급 select&quot;);                  // 이 select은 sendKeys 거부 -&gt; 클릭으로 선택
+    click(&quot;#userRoleSelector option[value=\&quot;USER\&quot;]&quot;, &quot;등급=사용자&quot;);
+    click(&quot;#showStatToSubuser_0&quot;, &quot;분석권한 없음&quot;);             // 라디오/연락처 먼저 -&gt; 이름 keyup에서 전체 재검증
+    click(&quot;#showSettingsToSubuser_0&quot;, &quot;설정권한 없음&quot;);
+    type(&quot;#subUserEmail&quot;, subEmail, &quot;이메일&quot;);
+    type(&quot;#subUserPassword&quot;, &quot;Zbxe2e!234&quot;, &quot;비밀번호&quot;);
+    type(&quot;#subUserPasswordCheck&quot;, &quot;Zbxe2e!234&quot;, &quot;비밀번호 확인&quot;);
+    type(&quot;#subUserPhone&quot;, &quot;01000000000&quot;, &quot;연락처&quot;);
+    type(&quot;#subUserName&quot;, &quot;zbx-e2e-subuser&quot;, &quot;이름&quot;);            // 마지막 keyup -&gt; 전체 검증 -&gt; disabled 해제
+    click(&quot;#saveSubUserInfoBtn&quot;, &quot;저장&quot;);                       // confirm 자동수락
+    browser.collectPerfEntries(&quot;subuser-create&quot;);
+    // --- 권한 변경: 새로고침 -&gt; 행 클릭(편집) -&gt; 분석 조회 권한 없음-&gt;모든 -&gt; 저장 ---
+    browser.navigate(&quot;https://midibus.kinxcdn.com/subUsers&quot;);
+    findX(&quot;//tr[contains(.,'&quot; + subEmail + &quot;')]//td[contains(@aria-describedby,'subUserList_email')]&quot;, &quot;보조사용자 행(편집)&quot;).click();   // 행 클릭 -&gt; 편집 모달
+    Zabbix.sleep(1500);
+    click(&quot;#showStatToSubuser_1&quot;, &quot;분석권한=모든 카테고리와 채널&quot;);   // 권한 변경
+    find(&quot;#subUserName&quot;, &quot;이름&quot;).clear();
+    type(&quot;#subUserName&quot;, &quot;zbx-e2e-subuser&quot;, &quot;이름 재입력&quot;);           // keyup -&gt; 재검증(저장 활성화)
+    click(&quot;#saveSubUserInfoBtn&quot;, &quot;저장&quot;);
+    browser.collectPerfEntries(&quot;subuser-perm&quot;);
+    // --- 변경 확인: 새로고침 후 분석 조회 권한 셀이 '모든...'인지 ---
+    browser.navigate(&quot;https://midibus.kinxcdn.com/subUsers&quot;);
+    var statCell = browser.findElement(&quot;xpath&quot;, &quot;//tr[contains(.,'&quot; + subEmail + &quot;')]//td[contains(@aria-describedby,'subUserList_statAnalysis')]&quot;);
+    if (statCell !== null &amp;&amp; (&quot;&quot; + statCell.getText()).indexOf(&quot;모든&quot;) &gt;= 0) { steps.subuser = 1; }   // 추가+권한변경 확인
+    // --- 삭제 (null 허용: 확인 실패 시에도 정리는 시도) ---
+    var subDel = browser.findElement(&quot;xpath&quot;, &quot;//tr[contains(.,'&quot; + subEmail + &quot;')]//img[contains(@onclick,'deleteSubUser')]&quot;);
+    if (subDel !== null) { subDel.click(); browser.collectPerfEntries(&quot;subuser-delete&quot;); }   // 삭제(confirm 자동수락)
+    lap(&quot;subuser&quot;);    // Step 5 전체(추가+권한변경+확인+삭제)
+  });
+
+  // Step 4: 보안키 생성 -&gt; 배포 URL 적용 -&gt; 그 URL로 재생 검증 (fixture: ch_19f2748f 배포 영상)
+  runBlock(&quot;securitykey&quot;, function () {
+    browser.navigate(&quot;https://midibus.kinxcdn.com/channel/ch_19f2748f&quot;);
+    click(&quot;#mediaName_19f26bae944f04b4&quot;, &quot;fixture 영상 선택&quot;);                        // 행 선택 -&gt; 우측 사이드바
+    click('button[data-bs-target=&quot;#createSecurePlayKeyLayer&quot;]', &quot;보안키 생성 버튼&quot;);   // 모달 열기
+    Zabbix.sleep(1000);
+    click(&quot;#quickBtn_1day&quot;, &quot;유효시간 1일&quot;);                                          // 시간(필수) -&gt; createKeyBtn 활성화
+    type(&quot;#tokenSecurity_allowedIP&quot;, &quot;&quot; + (params.allowed_ip || &quot;&quot;), &quot;허용 IP(VM)&quot;);   // Secret 매크로 {$VM.EGRESS_IP}에서 주입(하드코딩 제거). 비면 무제한, 있으면 그 IP로 제한(재생 요청 IP와 일치해야 재생됨)
+    click(&quot;#createKeyBtn&quot;, &quot;재생 키 생성&quot;);
+    click(&quot;#applyShareUrlBtn&quot;, &quot;배포 URL에 적용&quot;);
+    browser.collectPerfEntries(&quot;securitykey-create&quot;);
+    var playUrl = &quot;&quot; + find(&quot;#link_area&quot;, &quot;재생 URL&quot;).getText();
+    if (playUrl.indexOf(&quot;key=&quot;) &gt;= 0) {                                             // 보안키 적용된 재생 URL 확보
+      browser.navigate(playUrl);
+      var playBtn = browser.findElement(&quot;css selector&quot;, &quot;.jw-icon-display&quot;);        // JW 플레이어
+      if (playBtn !== null) {
+        try { playBtn.click(); } catch (e) {}                                        // 재생
+        steps.securitykey = 1;                                                        // 보안키 생성 + 재생 확인
+      }
+      browser.collectPerfEntries(&quot;securitykey-play&quot;);
+    }
+    // 주의: 위 두 검증(key= 부재/플레이어 null)은 예외 없이 0이 되는 경로 -&gt; errors.securitykey 없이 실패할 수 있음
+    lap(&quot;securitykey&quot;);   // Step 4 전체(키 생성+URL 적용+재생 검증)
+  });
+
+} catch (err) {
+  // 치명 경로(파라미터 파싱/로그인/인프라)만 여기로 온다. 블록 에러는 runBlock이 errors에 기록.
+  steps.err = &quot;&quot; + (err &amp;&amp; err.message ? err.message : err);
+  steps.err_at = crumb;
+  steps.err_class = classify(steps.err);
+  if (!(err instanceof BrowserError)) { browser.setError(err.message); }
+} finally {
+  var order = [&quot;login&quot;, &quot;category&quot;, &quot;deploy&quot;, &quot;media&quot;, &quot;securitykey&quot;, &quot;subuser&quot;];
+  // 최초 블록 에러를 steps.err*로 승격 (치명 catch가 이미 채웠으면 유지) — 기존 dependent(error.at/class) 호환
+  if (steps.err === undefined) {
+    for (var ei = 0; ei &lt; order.length; ei++) {
+      var eb = order[ei] === &quot;deploy&quot; ? &quot;category&quot; : order[ei];
+      if (errors[eb]) {
+        steps.err = errors[eb].msg; steps.err_at = errors[eb].at; steps.err_class = errors[eb].class;
+        break;
+      }
+    }
+  }
+  var failed = 0;
+  for (var k = 0; k &lt; order.length; k++) {
+    if (steps[order[k]] === 2) { continue; }             // 스킵은 실패가 아님
+    if (steps[order[k]] !== 1) { failed = k + 1; break; }
+  }
+  result = browser.getResult();
+  result.steps = steps;
+  result.failed_step = failed;
+  result.step_seconds = stepSec;   // 스텝 블록별 벽시계(초)
+  result.healed_count = healedCount;   // 항상 존재(0 포함) — last()&gt;0 트리거가 unsupported 없이 동작하게
+  var hk, hasHealed = false, hasErrors = false;
+  for (hk in healed) { hasHealed = true; break; }
+  if (hasHealed) { result.healed = healed; }
+  for (hk in errors) { hasErrors = true; break; }
+  if (hasErrors) { result.errors = errors; }
+  if (only !== null) { result.only = &quot;&quot; + params.only; }   // 온디맨드 실행임을 payload에 자기서술
+  return JSON.stringify(result);
+}
+</params>
+                    <timeout>300s</timeout>
+                    <parameters>
+                        <parameter>
+                            <name>password</name>
+                            <value>{$MIDIBUS.PASS}</value>
+                        </parameter>
+                        <parameter>
+                            <name>url</name>
+                            <value>https://midibus.kinxcdn.com/login</value>
+                        </parameter>
+                        <parameter>
+                            <name>username</name>
+                            <value>{$MIDIBUS.USER}</value>
+                        </parameter>
+                    </parameters>
+                    <triggers>
+                        <trigger>
+                            <expression>nodata(/midibus/browser.midibus.e2e,25m)=1</expression>
+                            <name>midibus E2E 모니터 데이터 끊김 (heartbeat)</name>
+                            <priority>HIGH</priority>
+                            <description>마스터 Browser Item(browser.midibus.e2e)의 데이터 도착 자체를 감시하는 heartbeat. 
+last()=0 스텝 트리거는 '값이 안 오는' 상황(폴러/selenium/서버 다운)을 못 잡고 마지막 성공값을 계속 정상으로 오판함 → 이 트리거가 그 사각지대(silent failure)를 커버.
+sec=25m = 마스터 Update interval(10m)의 약 2.5배(정상 1회 스킵 허용, 2회 연속 미도착=장애).</description>
+                            <tags>
+                                <tag>
+                                    <tag>service</tag>
+                                    <value>midibus</value>
+                                </tag>
+                                <tag>
+                                    <tag>type</tag>
+                                    <value>heartbeat</value>
+                                </tag>
+                            </tags>
+                        </trigger>
+                    </triggers>
+                </item>
+                <item>
+                    <name>midibus E2E scenario (ondemand)</name>
+                    <type>BROWSER</type>
+                    <key>browser.midibus.ondemand</key>
+                    <delay>10m</delay>
+                    <value_type>TEXT</value_type>
+                    <trends>0</trends>
+                    <params>/*
+ * midibus Browser Item - E2E scenario (Zabbix 7.0 Browser item)
+ * -----------------------------------------------------------------------------
+ * Host: midibus / key: browser.midibus.e2e (+ browser.midibus.ondemand) / Type: Browser / Timeout 300s
+ * Params: username={$MIDIBUS.USER} password={$MIDIBUS.PASS} url=https://midibus.kinxcdn.com/login
+ *         allowed_ip={$VM.EGRESS_IP}  (Secret 매크로 — 보안키 허용 IP. 비면 IP 제한 없음, 있으면 그 IP로 제한)
+ *         only=&lt;block[,block]&gt;  (선택. 예: &quot;securitykey&quot;, &quot;media,subuser&quot;. 미설정=전체 실행.
+ *                                login은 항상 실행. &quot;deploy&quot;는 &quot;category&quot;의 별칭.
+ *                                운영 아이템에는 절대 설정하지 않는다 - 온디맨드 전용)
+ * 선행: selenium 컨테이너 /testdata/beach.mp4 (compose 마운트)
+ * 배포: zabbix/update-item-script.sh (API push. ZBX_KEYS로 대상 키 지정 가능)
+ *
+ * 구조:
+ *  - 스텝 격리: login(치명, 실패 시 전체 중단) 외 4개 블록(category/media/subuser/securitykey)은
+ *    runBlock()의 개별 try/catch로 격리 - 한 블록이 죽어도 나머지는 계속 검사된다.
+ *    블록별 에러는 result.errors.&lt;block&gt;={at,class,msg}, 최초 에러만 steps.err*로 승격(기존 dependent 호환).
+ *  - 셀렉터 폴백: find/findX의 sel에 배열을 주면 후보를 라운드로빈(2s 프로브, 총예산 10s)으로 시도.
+ *    1순위가 아닌 후보로 성공하면 healed에 기록(= UI 드리프트 신호). healed_count는 항상 반환(0 포함).
+ *    주의: 커스텀 implicit wait 구간(업로드 60s)에는 배열 셀렉터 금지(프로브가 예산을 덮어씀).
+ *  - steps 값: 1=성공, 0=실패, 2=스킵(only로 제외됨. last()=0 트리거에 안 걸리는 값).
+ *
+ * 정석 API (레퍼런스: manual/config/items/preprocessing/javascript/browser_item_javascript_objects):
+ *  - setElementWaitTimeout : findElement 암묵적 대기(요소 '존재' 대기 -&gt; 수동 폴링 제거)
+ *  - unhandledPromptBehavior=accept : 네이티브 confirm 자동 수락(표준 W3C capability)
+ *  - collectPerfEntries(mark): 스텝별 성능 마크
+ *  - setError / BrowserError: 구조화된 에러
+ *  - getProperty            : 체크박스 실시간 상태
+ * 주의: implicit wait는 '가림(click intercepted)'은 못 푼다 -&gt; click()에서 가림일 때만 재시도.
+ */
+var WAIT_MAIN = 10000;   // 기본 implicit wait
+var WAIT_PROBE = 2000;   // 폴백 배열 프로브용 짧은 wait
+
+var opts = Browser.chromeOptions();
+opts.capabilities.alwaysMatch.unhandledPromptBehavior = &quot;accept&quot;;
+var browser = new Browser(opts);
+browser.setScreenSize(1920, 1600);   // 하단 고정 푸터(#midibusFooter)가 저장 버튼을 덮음 -&gt; 뷰포트 높여 버튼을 푸터 밖으로
+browser.setSessionTimeout(30000);
+browser.setElementWaitTimeout(WAIT_MAIN);
+
+var steps = { login:0, category:0, deploy:0, media:0, securitykey:0, subuser:0 };
+var result;
+
+var crumb = &quot;&quot;;       // 마지막으로 시도한 서브액션(요소 접근 name) — 실패 지점 특정용(find/findX 진입 시 갱신)
+var foundSel = &quot;&quot;;    // 마지막 find()가 실제로 매치시킨 셀렉터(배열 폴백 대응 — click/type 재시도의 re-find용)
+var errors = {};      // 블록별 에러 상세 { at, class, msg }
+var healed = {};      // self-heal 기록: name -&gt; 성공한 비1순위 셀렉터
+var healedCount = 0;
+var only = null;      // null=전체 실행 / 배열=해당 블록만 (login은 항상)
+var stepSec = {};     // 스텝 블록별 벽시계 소요(초). perf 마크는 &quot;페이지 로드&quot; 시간이라 스텝 시간이 아님(#3에서 확인)
+var lapT = Date.now();
+function lap(k) { stepSec[k] = Math.round((Date.now() - lapT) / 100) / 10; lapT = Date.now(); }
+
+function classify(msg) {   // 에러 분류: 셀렉터 드리프트 / 타이밍 flaky / 인프라 / 기능 장애 후보
+  var ml = msg.toLowerCase();
+  return ml.indexOf(&quot;not found&quot;) &gt;= 0 ? &quot;selector&quot;
+    : (ml.indexOf(&quot;intercepted&quot;) &gt;= 0 || ml.indexOf(&quot;interactable&quot;) &gt;= 0) ? &quot;timing&quot;
+    : (ml.indexOf(&quot;session&quot;) &gt;= 0 || ml.indexOf(&quot;webdriver&quot;) &gt;= 0 || ml.indexOf(&quot;resolve&quot;) &gt;= 0 || ml.indexOf(&quot;timeout&quot;) &gt;= 0) ? &quot;webdriver&quot;
+    : &quot;logic&quot;;
+}
+
+function findAny(by, sel, name) {
+  crumb = name;
+  if (typeof sel === &quot;string&quot;) {           // 단일 셀렉터: 기존 동작 그대로 (implicit wait = WAIT_MAIN)
+    foundSel = sel;
+    var el = browser.findElement(by, sel);
+    if (el === null) { throw Error(&quot;not found: &quot; + name + &quot; (&quot; + sel + &quot;)&quot;); }
+    return el;
+  }
+  // 배열: 라운드로빈 프로브. 총예산 WAIT_MAIN 안에서 후보들을 WAIT_PROBE씩 반복 순회.
+  // 1순위를 매 바퀴 다시 시도하므로 &quot;느린 페이지 + 멀쩡한 1순위&quot;가 가짜 heal로 기록될 확률을 낮춘다.
+  var deadline = Date.now() + WAIT_MAIN;
+  browser.setElementWaitTimeout(WAIT_PROBE);
+  try {
+    do {
+      for (var i = 0; i &lt; sel.length; i++) {
+        var e2 = browser.findElement(by, sel[i]);
+        if (e2 !== null) {
+          foundSel = sel[i];
+          if (i &gt; 0) { healed[name] = sel[i]; healedCount++; }   // 폴백으로 성공 = 드리프트 신호
+          return e2;
+        }
+      }
+    } while (Date.now() &lt; deadline);
+  } finally { browser.setElementWaitTimeout(WAIT_MAIN); }
+  throw Error(&quot;not found: &quot; + name + &quot; (&quot; + sel.join(&quot; | &quot;) + &quot;)&quot;);
+}
+function find(sel, name)  { return findAny(&quot;css selector&quot;, sel, name); }
+function findX(xp, name)  { return findAny(&quot;xpath&quot;, xp, name); }
+
+function gone(sel, waitMs) {             // 짧은 대기로 '부재' 확인
+  browser.setElementWaitTimeout(waitMs || 2000);
+  var el = browser.findElement(&quot;css selector&quot;, sel);
+  browser.setElementWaitTimeout(WAIT_MAIN);
+  return el === null;
+}
+function click(sel, name) {              // 존재는 implicit wait, '가림/미준비'일 때만 재시도
+  var el = find(sel, name);
+  var rsel = foundSel;                   // 실제 매치된 셀렉터(배열이었을 수 있으므로 re-find는 이걸로)
+  for (var i = 0; i &lt; 15; i++) {
+    try { el.click(); return; }
+    catch (e) {
+      var msg = &quot;&quot; + e;
+      if (msg.indexOf(&quot;intercepted&quot;) &lt; 0 &amp;&amp; msg.indexOf(&quot;interactable&quot;) &lt; 0) { throw e; }   // 가림/미준비 외 에러는 즉시
+      Zabbix.sleep(300);
+      var re = browser.findElement(&quot;css selector&quot;, rsel);
+      if (re !== null) { el = re; }
+    }
+  }
+  try { el.click(); } catch (ef) { throw Error(name + &quot;: &quot; + ef); }   // 마지막 시도 실패 시 이름 포함
+}
+function type(sel, txt, name) {          // 존재는 implicit wait, '아직 상호작용 불가(모달 애니메이션 등)'면 재시도
+  var el = find(sel, name);
+  var rsel = foundSel;
+  for (var i = 0; i &lt; 20; i++) {
+    try { el.sendKeys(txt); return; }
+    catch (e) {
+      if ((&quot;&quot; + e).indexOf(&quot;interactable&quot;) &lt; 0) { throw e; }
+      Zabbix.sleep(300);
+      var re = browser.findElement(&quot;css selector&quot;, rsel);
+      if (re !== null) { el = re; }
+    }
+  }
+  try { el.sendKeys(txt); } catch (ef) { throw Error(name + &quot;: &quot; + ef); }
+}
+
+function wants(b) { return only === null || only.indexOf(b) &gt;= 0; }
+
+function runBlock(name, fn) {            // 블록 격리: only 게이트 + 개별 try/catch
+  if (!wants(name)) {
+    steps[name] = 2;                     // 2=스킵 (0/1과 구분, last()=0 트리거에 안 걸림)
+    if (name === &quot;category&quot;) { steps.deploy = 2; }
+    return;
+  }
+  try { fn(); }
+  catch (e) {
+    var m = &quot;&quot; + (e &amp;&amp; e.message ? e.message : e);
+    errors[name] = { at: crumb, class: classify(m), msg: m };
+    lap(name);                                    // 실패한 블록의 소요시간도 기록
+    browser.setElementWaitTimeout(WAIT_MAIN);     // 블록 내에서 올린 wait(업로드 60s)이 남지 않게 복원
+  }
+}
+
+try {
+  var params = JSON.parse(value);
+  if (params.only) {                     // 온디맨드 부분 실행 (운영 아이템엔 미설정)
+    only = (&quot;&quot; + params.only).split(&quot;,&quot;);
+    for (var oi = 0; oi &lt; only.length; oi++) {
+      only[oi] = only[oi].replace(/^\s+|\s+$/g, &quot;&quot;);
+      if (only[oi] === &quot;deploy&quot;) { only[oi] = &quot;category&quot;; }   // deploy는 category 블록 내부
+    }
+  }
+
+  // Step 1: 로그인 — 치명 블록(세션 전제). 실패 시 바깥 catch로 전체 중단.
+  browser.navigate(params.url);
+  find(&quot;#username&quot;, &quot;username&quot;).sendKeys(params.username);
+  find(&quot;#password&quot;, &quot;password&quot;).sendKeys(params.password);
+  click(&quot;#midibusLoginBtn&quot;, &quot;login button&quot;);
+  find(&quot;#accountDropdownBtn&quot;, &quot;login success marker&quot;);
+  steps.login = 1;
+  browser.collectPerfEntries(&quot;login&quot;);
+  lap(&quot;login&quot;);
+
+  // Step 2: 카테고리 생성 -&gt; 자동배포 -&gt; 삭제
+  runBlock(&quot;category&quot;, function () {
+    browser.navigate(&quot;https://midibus.kinxcdn.com/config&quot;);
+    click(&quot;#categoryTab-tab&quot;, &quot;category tab&quot;);
+
+    if (gone('#allCategories a[title=&quot;zbx-e2e-test&quot;]', 3000)) {
+      click(&quot;#menu_media_icon&quot;, &quot;media menu&quot;);
+      click(&quot;#addCategoryBtn&quot;, &quot;add category button&quot;);
+      var nameInput = find(&quot;#newCategoryName&quot;, &quot;category name input&quot;);
+      nameInput.clear();
+      nameInput.sendKeys(&quot;zbx-e2e-test&quot;);
+      click('button[onclick=&quot;createNewCategory()&quot;]', &quot;create category button&quot;);
+      browser.navigate(&quot;https://midibus.kinxcdn.com/config&quot;);
+      click(&quot;#categoryTab-tab&quot;, &quot;category tab (after create)&quot;);
+    }
+
+    click('#allCategories a[title=&quot;zbx-e2e-test&quot;]', &quot;category link&quot;);
+    steps.category = 1;
+    browser.collectPerfEntries(&quot;category-create&quot;);
+
+    var chk = find(&quot;#autoDistribution&quot;, &quot;auto distribution checkbox&quot;);
+    var checked = chk.getProperty(&quot;checked&quot;);
+    if (checked !== true &amp;&amp; checked !== &quot;true&quot;) { click(&quot;#autoDistribution&quot;, &quot;auto distribution checkbox&quot;); }
+    click(&quot;#categoryConfigSaveBtn&quot;, &quot;category save button&quot;);
+    steps.deploy = 1;
+    browser.collectPerfEntries(&quot;category-deploy&quot;);
+
+    click(&quot;#deleteCategoryBtn&quot;, &quot;delete category button&quot;);   // confirm 자동 수락
+    browser.collectPerfEntries(&quot;category-delete&quot;);
+    lap(&quot;category&quot;);   // Step 2 전체(생성+자동배포+삭제) — deploy는 이 블록에 포함
+  });
+
+  // Step 3: 미디어 업로드 -&gt; 확인 -&gt; 삭제
+  runBlock(&quot;media&quot;, function () {
+    browser.navigate(&quot;https://midibus.kinxcdn.com/config&quot;);   // 격리: 블록 시작 상태를 명시적으로 리셋
+    click(&quot;.fileUploadBtn&quot;, &quot;media upload button&quot;);
+    find('.qq-upload-button input[type=&quot;file&quot;]', &quot;file input&quot;).sendKeys(&quot;/testdata/beach.mp4&quot;);
+    click(&quot;#trigger-upload&quot;, &quot;upload start button&quot;);
+
+    browser.setElementWaitTimeout(60000);                     // 업로드+인코딩 대기 (이 구간엔 배열 셀렉터 금지)
+    find(&quot;.qq-upload-list li.qq-upload-success&quot;, &quot;upload success&quot;);
+    browser.setElementWaitTimeout(WAIT_MAIN);
+    browser.collectPerfEntries(&quot;media-upload&quot;);
+
+    browser.navigate(&quot;https://midibus.kinxcdn.com/media&quot;);
+    var nameDiv = findX(&quot;//div[contains(@id,'mediaName_') and contains(text(),'beach.mp4')]&quot;, &quot;uploaded media in list&quot;);
+    steps.media = 1;
+
+    var chkId = nameDiv.getAttribute(&quot;id&quot;).replace(&quot;mediaName_&quot;, &quot;mediaCheck_&quot;);
+    click(&quot;#&quot; + chkId, &quot;media checkbox&quot;);
+    find(&quot;#mediaActionSelector&quot;, &quot;media action selector&quot;).sendKeys(&quot;삭제&quot;);   // change -&gt; confirm 자동 수락
+    browser.collectPerfEntries(&quot;media-delete&quot;);
+    lap(&quot;media&quot;);      // Step 3 전체(업로드+인코딩 대기+확인+삭제)
+  });
+
+  // Step 5: 보조사용자 추가 -&gt; 권한 변경 -&gt; 삭제 (요구 스펙 4.3)
+  runBlock(&quot;subuser&quot;, function () {
+    var subEmail = &quot;zbx-e2e-&quot; + Date.now() + &quot;@e2e-test.com&quot;;   // 매번 고유
+    browser.navigate(&quot;https://midibus.kinxcdn.com/subUsers&quot;);
+    click(&quot;#editPlaylistBtn&quot;, &quot;보조사용자 추가&quot;);
+    Zabbix.sleep(1500);                                          // 모달 렌더 대기
+    click(&quot;#userRoleSelector&quot;, &quot;등급 select&quot;);                  // 이 select은 sendKeys 거부 -&gt; 클릭으로 선택
+    click(&quot;#userRoleSelector option[value=\&quot;USER\&quot;]&quot;, &quot;등급=사용자&quot;);
+    click(&quot;#showStatToSubuser_0&quot;, &quot;분석권한 없음&quot;);             // 라디오/연락처 먼저 -&gt; 이름 keyup에서 전체 재검증
+    click(&quot;#showSettingsToSubuser_0&quot;, &quot;설정권한 없음&quot;);
+    type(&quot;#subUserEmail&quot;, subEmail, &quot;이메일&quot;);
+    type(&quot;#subUserPassword&quot;, &quot;Zbxe2e!234&quot;, &quot;비밀번호&quot;);
+    type(&quot;#subUserPasswordCheck&quot;, &quot;Zbxe2e!234&quot;, &quot;비밀번호 확인&quot;);
+    type(&quot;#subUserPhone&quot;, &quot;01000000000&quot;, &quot;연락처&quot;);
+    type(&quot;#subUserName&quot;, &quot;zbx-e2e-subuser&quot;, &quot;이름&quot;);            // 마지막 keyup -&gt; 전체 검증 -&gt; disabled 해제
+    click(&quot;#saveSubUserInfoBtn&quot;, &quot;저장&quot;);                       // confirm 자동수락
+    browser.collectPerfEntries(&quot;subuser-create&quot;);
+    // --- 권한 변경: 새로고침 -&gt; 행 클릭(편집) -&gt; 분석 조회 권한 없음-&gt;모든 -&gt; 저장 ---
+    browser.navigate(&quot;https://midibus.kinxcdn.com/subUsers&quot;);
+    findX(&quot;//tr[contains(.,'&quot; + subEmail + &quot;')]//td[contains(@aria-describedby,'subUserList_email')]&quot;, &quot;보조사용자 행(편집)&quot;).click();   // 행 클릭 -&gt; 편집 모달
+    Zabbix.sleep(1500);
+    click(&quot;#showStatToSubuser_1&quot;, &quot;분석권한=모든 카테고리와 채널&quot;);   // 권한 변경
+    find(&quot;#subUserName&quot;, &quot;이름&quot;).clear();
+    type(&quot;#subUserName&quot;, &quot;zbx-e2e-subuser&quot;, &quot;이름 재입력&quot;);           // keyup -&gt; 재검증(저장 활성화)
+    click(&quot;#saveSubUserInfoBtn&quot;, &quot;저장&quot;);
+    browser.collectPerfEntries(&quot;subuser-perm&quot;);
+    // --- 변경 확인: 새로고침 후 분석 조회 권한 셀이 '모든...'인지 ---
+    browser.navigate(&quot;https://midibus.kinxcdn.com/subUsers&quot;);
+    var statCell = browser.findElement(&quot;xpath&quot;, &quot;//tr[contains(.,'&quot; + subEmail + &quot;')]//td[contains(@aria-describedby,'subUserList_statAnalysis')]&quot;);
+    if (statCell !== null &amp;&amp; (&quot;&quot; + statCell.getText()).indexOf(&quot;모든&quot;) &gt;= 0) { steps.subuser = 1; }   // 추가+권한변경 확인
+    // --- 삭제 (null 허용: 확인 실패 시에도 정리는 시도) ---
+    var subDel = browser.findElement(&quot;xpath&quot;, &quot;//tr[contains(.,'&quot; + subEmail + &quot;')]//img[contains(@onclick,'deleteSubUser')]&quot;);
+    if (subDel !== null) { subDel.click(); browser.collectPerfEntries(&quot;subuser-delete&quot;); }   // 삭제(confirm 자동수락)
+    lap(&quot;subuser&quot;);    // Step 5 전체(추가+권한변경+확인+삭제)
+  });
+
+  // Step 4: 보안키 생성 -&gt; 배포 URL 적용 -&gt; 그 URL로 재생 검증 (fixture: ch_19f2748f 배포 영상)
+  runBlock(&quot;securitykey&quot;, function () {
+    browser.navigate(&quot;https://midibus.kinxcdn.com/channel/ch_19f2748f&quot;);
+    click(&quot;#mediaName_19f26bae944f04b4&quot;, &quot;fixture 영상 선택&quot;);                        // 행 선택 -&gt; 우측 사이드바
+    click('button[data-bs-target=&quot;#createSecurePlayKeyLayer&quot;]', &quot;보안키 생성 버튼&quot;);   // 모달 열기
+    Zabbix.sleep(1000);
+    click(&quot;#quickBtn_1day&quot;, &quot;유효시간 1일&quot;);                                          // 시간(필수) -&gt; createKeyBtn 활성화
+    type(&quot;#tokenSecurity_allowedIP&quot;, &quot;&quot; + (params.allowed_ip || &quot;&quot;), &quot;허용 IP(VM)&quot;);   // Secret 매크로 {$VM.EGRESS_IP}에서 주입(하드코딩 제거). 비면 무제한, 있으면 그 IP로 제한(재생 요청 IP와 일치해야 재생됨)
+    click(&quot;#createKeyBtn&quot;, &quot;재생 키 생성&quot;);
+    click(&quot;#applyShareUrlBtn&quot;, &quot;배포 URL에 적용&quot;);
+    browser.collectPerfEntries(&quot;securitykey-create&quot;);
+    var playUrl = &quot;&quot; + find(&quot;#link_area&quot;, &quot;재생 URL&quot;).getText();
+    if (playUrl.indexOf(&quot;key=&quot;) &gt;= 0) {                                             // 보안키 적용된 재생 URL 확보
+      browser.navigate(playUrl);
+      var playBtn = browser.findElement(&quot;css selector&quot;, &quot;.jw-icon-display&quot;);        // JW 플레이어
+      if (playBtn !== null) {
+        try { playBtn.click(); } catch (e) {}                                        // 재생
+        steps.securitykey = 1;                                                        // 보안키 생성 + 재생 확인
+      }
+      browser.collectPerfEntries(&quot;securitykey-play&quot;);
+    }
+    // 주의: 위 두 검증(key= 부재/플레이어 null)은 예외 없이 0이 되는 경로 -&gt; errors.securitykey 없이 실패할 수 있음
+    lap(&quot;securitykey&quot;);   // Step 4 전체(키 생성+URL 적용+재생 검증)
+  });
+
+} catch (err) {
+  // 치명 경로(파라미터 파싱/로그인/인프라)만 여기로 온다. 블록 에러는 runBlock이 errors에 기록.
+  steps.err = &quot;&quot; + (err &amp;&amp; err.message ? err.message : err);
+  steps.err_at = crumb;
+  steps.err_class = classify(steps.err);
+  if (!(err instanceof BrowserError)) { browser.setError(err.message); }
+} finally {
+  var order = [&quot;login&quot;, &quot;category&quot;, &quot;deploy&quot;, &quot;media&quot;, &quot;securitykey&quot;, &quot;subuser&quot;];
+  // 최초 블록 에러를 steps.err*로 승격 (치명 catch가 이미 채웠으면 유지) — 기존 dependent(error.at/class) 호환
+  if (steps.err === undefined) {
+    for (var ei = 0; ei &lt; order.length; ei++) {
+      var eb = order[ei] === &quot;deploy&quot; ? &quot;category&quot; : order[ei];
+      if (errors[eb]) {
+        steps.err = errors[eb].msg; steps.err_at = errors[eb].at; steps.err_class = errors[eb].class;
+        break;
+      }
+    }
+  }
+  var failed = 0;
+  for (var k = 0; k &lt; order.length; k++) {
+    if (steps[order[k]] === 2) { continue; }             // 스킵은 실패가 아님
+    if (steps[order[k]] !== 1) { failed = k + 1; break; }
+  }
+  result = browser.getResult();
+  result.steps = steps;
+  result.failed_step = failed;
+  result.step_seconds = stepSec;   // 스텝 블록별 벽시계(초)
+  result.healed_count = healedCount;   // 항상 존재(0 포함) — last()&gt;0 트리거가 unsupported 없이 동작하게
+  var hk, hasHealed = false, hasErrors = false;
+  for (hk in healed) { hasHealed = true; break; }
+  if (hasHealed) { result.healed = healed; }
+  for (hk in errors) { hasErrors = true; break; }
+  if (hasErrors) { result.errors = errors; }
+  if (only !== null) { result.only = &quot;&quot; + params.only; }   // 온디맨드 실행임을 payload에 자기서술
+  return JSON.stringify(result);
+}
+</params>
+                    <timeout>300s</timeout>
+                    <parameters>
+                        <parameter>
+                            <name>only</name>
+                        </parameter>
+                        <parameter>
+                            <name>password</name>
+                            <value>{$MIDIBUS.PASS}</value>
+                        </parameter>
+                        <parameter>
+                            <name>url</name>
+                            <value>https://midibus.kinxcdn.com/login</value>
+                        </parameter>
+                        <parameter>
+                            <name>username</name>
+                            <value>{$MIDIBUS.USER}</value>
+                        </parameter>
+                    </parameters>
+                </item>
+                <item>
+                    <name>midibus - error at</name>
+                    <type>DEPENDENT</type>
+                    <key>midibus.error.at</key>
+                    <delay>0</delay>
+                    <value_type>CHAR</value_type>
+                    <trends>0</trends>
+                    <preprocessing>
+                        <step>
+                            <type>JSONPATH</type>
+                            <parameters>
+                                <parameter>$.steps.err_at</parameter>
+                            </parameters>
+                            <error_handler>DISCARD_VALUE</error_handler>
+                        </step>
+                    </preprocessing>
+                    <master_item>
+                        <key>browser.midibus.e2e</key>
+                    </master_item>
+                </item>
+                <item>
+                    <name>midibus - error class</name>
+                    <type>DEPENDENT</type>
+                    <key>midibus.error.class</key>
+                    <delay>0</delay>
+                    <value_type>TEXT</value_type>
+                    <trends>0</trends>
+                    <preprocessing>
+                        <step>
+                            <type>JSONPATH</type>
+                            <parameters>
+                                <parameter>$.steps.err_class</parameter>
+                            </parameters>
+                            <error_handler>DISCARD_VALUE</error_handler>
+                        </step>
+                    </preprocessing>
+                    <master_item>
+                        <key>browser.midibus.e2e</key>
+                    </master_item>
+                </item>
+                <item>
+                    <name>midibus - failed step</name>
+                    <type>DEPENDENT</type>
+                    <key>midibus.failed_step</key>
+                    <delay>0</delay>
+                    <preprocessing>
+                        <step>
+                            <type>JSONPATH</type>
+                            <parameters>
+                                <parameter>$.failed_step</parameter>
+                            </parameters>
+                        </step>
+                    </preprocessing>
+                    <master_item>
+                        <key>browser.midibus.e2e</key>
+                    </master_item>
+                </item>
+                <item>
+                    <name>midibus E2E scenario: midibus - perf login pageload</name>
+                    <type>DEPENDENT</type>
+                    <key>midibus.perf.login.pageload</key>
+                    <delay>0</delay>
+                    <value_type>FLOAT</value_type>
+                    <units>s</units>
+                    <preprocessing>
+                        <step>
+                            <type>JSONPATH</type>
+                            <parameters>
+                                <parameter>$.performance_data.details[?(@.mark=='login')].navigation.duration.first()</parameter>
+                            </parameters>
+                            <error_handler>DISCARD_VALUE</error_handler>
+                        </step>
+                    </preprocessing>
+                    <master_item>
+                        <key>browser.midibus.e2e</key>
+                    </master_item>
+                    <triggers>
+                        <trigger>
+                            <expression>min(/midibus/midibus.perf.login.pageload,#3) &gt; avg(/midibus/midibus.perf.login.pageload,7d)*2 and min(/midibus/midibus.perf.login.pageload,#3) &gt; 5</expression>
+                            <name>midibus 로그인 페이지 성능 열화: {HOST.NAME}</name>
+                            <priority>WARNING</priority>
+                            <description>로그인 후 페이지 로드가 3회 연속, 7일 평균의 2배 초과 + 절대 5초 초과. 열화 예고 신호(장애 아님) — SLA·Slack 미연동, 대시보드 관찰용.</description>
+                            <tags>
+                                <tag>
+                                    <tag>mark</tag>
+                                    <value>login</value>
+                                </tag>
+                                <tag>
+                                    <tag>type</tag>
+                                    <value>performance</value>
+                                </tag>
+                            </tags>
+                        </trigger>
+                    </triggers>
+                </item>
+                <item>
+                    <name>midibus E2E scenario: midibus - perf play fetch</name>
+                    <type>DEPENDENT</type>
+                    <key>midibus.perf.play.fetch</key>
+                    <delay>0</delay>
+                    <value_type>FLOAT</value_type>
+                    <units>s</units>
+                    <preprocessing>
+                        <step>
+                            <type>JSONPATH</type>
+                            <parameters>
+                                <parameter>$.performance_data.details[?(@.mark=='securitykey-play')].resource.response_time.first()</parameter>
+                            </parameters>
+                            <error_handler>DISCARD_VALUE</error_handler>
+                        </step>
+                    </preprocessing>
+                    <master_item>
+                        <key>browser.midibus.e2e</key>
+                    </master_item>
+                    <triggers>
+                        <trigger>
+                            <expression>min(/midibus/midibus.perf.play.fetch,#3) &gt; avg(/midibus/midibus.perf.play.fetch,7d)*2 and min(/midibus/midibus.perf.play.fetch,#3) &gt; 30</expression>
+                            <name>midibus 비디오 전송 성능 열화: {HOST.NAME}</name>
+                            <priority>WARNING</priority>
+                            <tags>
+                                <tag>
+                                    <tag>mark</tag>
+                                    <value>securitykey-play</value>
+                                </tag>
+                                <tag>
+                                    <tag>type</tag>
+                                    <value>performance</value>
+                                </tag>
+                            </tags>
+                        </trigger>
+                    </triggers>
+                </item>
+                <item>
+                    <name>midibus E2E scenario: midibus - perf play pageload</name>
+                    <type>DEPENDENT</type>
+                    <key>midibus.perf.play.pageload</key>
+                    <delay>0</delay>
+                    <value_type>FLOAT</value_type>
+                    <units>s</units>
+                    <preprocessing>
+                        <step>
+                            <type>JSONPATH</type>
+                            <parameters>
+                                <parameter>$.performance_data.details[?(@.mark=='securitykey-play')].navigation.duration.first()</parameter>
+                            </parameters>
+                            <error_handler>DISCARD_VALUE</error_handler>
+                        </step>
+                    </preprocessing>
+                    <master_item>
+                        <key>browser.midibus.e2e</key>
+                    </master_item>
+                    <triggers>
+                        <trigger>
+                            <expression>min(/midibus/midibus.perf.play.pageload,#3) &gt; avg(/midibus/midibus.perf.play.pageload,7d)*2 and min(/midibus/midibus.perf.play.pageload,#3) &gt; 3</expression>
+                            <name>midibus 재생 시작 성능 열화: {HOST.NAME}</name>
+                            <priority>WARNING</priority>
+                            <tags>
+                                <tag>
+                                    <tag>mark</tag>
+                                    <value>securitykey-play</value>
+                                </tag>
+                                <tag>
+                                    <tag>type</tag>
+                                    <value>performance</value>
+                                </tag>
+                            </tags>
+                        </trigger>
+                    </triggers>
+                </item>
+                <item>
+                    <name>midibus E2E scenario: midibus - perf total</name>
+                    <type>DEPENDENT</type>
+                    <key>midibus.perf.total</key>
+                    <delay>0</delay>
+                    <value_type>FLOAT</value_type>
+                    <units>s</units>
+                    <preprocessing>
+                        <step>
+                            <type>JSONPATH</type>
+                            <parameters>
+                                <parameter>$.duration</parameter>
+                            </parameters>
+                        </step>
+                    </preprocessing>
+                    <master_item>
+                        <key>browser.midibus.e2e</key>
+                    </master_item>
+                    <triggers>
+                        <trigger>
+                            <expression>min(/midibus/midibus.perf.total,#3) &gt; avg(/midibus/midibus.perf.total,7d)*2 and min(/midibus/midibus.perf.total,#3) &gt; 60</expression>
+                            <name>midibus E2E 시나리오 성능 열화: {HOST.NAME}</name>
+                            <priority>WARNING</priority>
+                            <description>시나리오 전체 소요(세션 생성→결과 회수, 평시 ~26s)가 3회 연속 7일 평균의 2배 + 절대 60초 초과. 특정 페이지가 아닌 전반적 열화 신호. 아이템 Timeout 300s에 도달하면 실패로 전환되므로 그 전 구간(60~300s)을 이 트리거가 커버.</description>
+                            <tags>
+                                <tag>
+                                    <tag>mark</tag>
+                                    <value>total</value>
+                                </tag>
+                                <tag>
+                                    <tag>type</tag>
+                                    <value>performance</value>
+                                </tag>
+                            </tags>
+                        </trigger>
+                    </triggers>
+                </item>
+                <item>
+                    <name>midibus - sec category</name>
+                    <type>DEPENDENT</type>
+                    <key>midibus.sec.category</key>
+                    <delay>0</delay>
+                    <value_type>FLOAT</value_type>
+                    <units>s</units>
+                    <preprocessing>
+                        <step>
+                            <type>JSONPATH</type>
+                            <parameters>
+                                <parameter>$.step_seconds.category</parameter>
+                            </parameters>
+                            <error_handler>DISCARD_VALUE</error_handler>
+                        </step>
+                    </preprocessing>
+                    <master_item>
+                        <key>browser.midibus.e2e</key>
+                    </master_item>
+                </item>
+                <item>
+                    <name>midibus - sec login</name>
+                    <type>DEPENDENT</type>
+                    <key>midibus.sec.login</key>
+                    <delay>0</delay>
+                    <value_type>FLOAT</value_type>
+                    <units>s</units>
+                    <preprocessing>
+                        <step>
+                            <type>JSONPATH</type>
+                            <parameters>
+                                <parameter>$.step_seconds.login</parameter>
+                            </parameters>
+                            <error_handler>DISCARD_VALUE</error_handler>
+                        </step>
+                    </preprocessing>
+                    <master_item>
+                        <key>browser.midibus.e2e</key>
+                    </master_item>
+                </item>
+                <item>
+                    <name>midibus - sec media</name>
+                    <type>DEPENDENT</type>
+                    <key>midibus.sec.media</key>
+                    <delay>0</delay>
+                    <value_type>FLOAT</value_type>
+                    <units>s</units>
+                    <preprocessing>
+                        <step>
+                            <type>JSONPATH</type>
+                            <parameters>
+                                <parameter>$.step_seconds.media</parameter>
+                            </parameters>
+                            <error_handler>DISCARD_VALUE</error_handler>
+                        </step>
+                    </preprocessing>
+                    <master_item>
+                        <key>browser.midibus.e2e</key>
+                    </master_item>
+                </item>
+                <item>
+                    <name>midibus - sec securitykey</name>
+                    <type>DEPENDENT</type>
+                    <key>midibus.sec.securitykey</key>
+                    <delay>0</delay>
+                    <value_type>FLOAT</value_type>
+                    <units>s</units>
+                    <preprocessing>
+                        <step>
+                            <type>JSONPATH</type>
+                            <parameters>
+                                <parameter>$.step_seconds.securitykey</parameter>
+                            </parameters>
+                            <error_handler>DISCARD_VALUE</error_handler>
+                        </step>
+                    </preprocessing>
+                    <master_item>
+                        <key>browser.midibus.e2e</key>
+                    </master_item>
+                </item>
+                <item>
+                    <name>midibus - sec subuser</name>
+                    <type>DEPENDENT</type>
+                    <key>midibus.sec.subuser</key>
+                    <delay>0</delay>
+                    <value_type>FLOAT</value_type>
+                    <units>s</units>
+                    <preprocessing>
+                        <step>
+                            <type>JSONPATH</type>
+                            <parameters>
+                                <parameter>$.step_seconds.subuser</parameter>
+                            </parameters>
+                            <error_handler>DISCARD_VALUE</error_handler>
+                        </step>
+                    </preprocessing>
+                    <master_item>
+                        <key>browser.midibus.e2e</key>
+                    </master_item>
+                </item>
+                <item>
+                    <name>midibus - category</name>
+                    <type>DEPENDENT</type>
+                    <key>midibus.step.category</key>
+                    <delay>0</delay>
+                    <preprocessing>
+                        <step>
+                            <type>JSONPATH</type>
+                            <parameters>
+                                <parameter>$.steps.category</parameter>
+                            </parameters>
+                        </step>
+                    </preprocessing>
+                    <master_item>
+                        <key>browser.midibus.e2e</key>
+                    </master_item>
+                    <triggers>
+                        <trigger>
+                            <expression>last(/midibus/midibus.step.category)=0</expression>
+                            <name>midibus 카테고리 실패: {HOST.NAME}</name>
+                            <event_name>midibus 카테고리 실패: {HOST.NAME} [{?last(/midibus/midibus.error.class)}: {?last(/midibus/midibus.error.at)}]</event_name>
+                            <opdata>category_ok={ITEM.LASTVALUE1}</opdata>
+                            <priority>AVERAGE</priority>
+                            <dependencies>
+                                <dependency>
+                                    <name>midibus 로그인 실패: {HOST.NAME}</name>
+                                    <expression>last(/midibus/midibus.step.login)=0</expression>
+                                </dependency>
+                            </dependencies>
+                            <tags>
+                                <tag>
+                                    <tag>service</tag>
+                                    <value>midibus</value>
+                                </tag>
+                                <tag>
+                                    <tag>step</tag>
+                                    <value>category</value>
+                                </tag>
+                            </tags>
+                        </trigger>
+                    </triggers>
+                </item>
+                <item>
+                    <name>midibus - deploy</name>
+                    <type>DEPENDENT</type>
+                    <key>midibus.step.deploy</key>
+                    <delay>0</delay>
+                    <preprocessing>
+                        <step>
+                            <type>JSONPATH</type>
+                            <parameters>
+                                <parameter>$.steps.deploy</parameter>
+                            </parameters>
+                        </step>
+                    </preprocessing>
+                    <master_item>
+                        <key>browser.midibus.e2e</key>
+                    </master_item>
+                    <triggers>
+                        <trigger>
+                            <expression>last(/midibus/midibus.step.deploy)=0</expression>
+                            <name>midibus 자동배포 실패: {HOST.NAME}</name>
+                            <event_name>midibus 자동배포 실패: {HOST.NAME} [{?last(/midibus/midibus.error.class)}: {?last(/midibus/midibus.error.at)}]</event_name>
+                            <opdata>deploy_ok={ITEM.LASTVALUE1}</opdata>
+                            <priority>AVERAGE</priority>
+                            <dependencies>
+                                <dependency>
+                                    <name>midibus 카테고리 실패: {HOST.NAME}</name>
+                                    <expression>last(/midibus/midibus.step.category)=0</expression>
+                                </dependency>
+                            </dependencies>
+                            <tags>
+                                <tag>
+                                    <tag>service</tag>
+                                    <value>midibus</value>
+                                </tag>
+                                <tag>
+                                    <tag>step</tag>
+                                    <value>deploy</value>
+                                </tag>
+                            </tags>
+                        </trigger>
+                    </triggers>
+                </item>
+                <item>
+                    <name>midibus - login</name>
+                    <type>DEPENDENT</type>
+                    <key>midibus.step.login</key>
+                    <delay>0</delay>
+                    <preprocessing>
+                        <step>
+                            <type>JSONPATH</type>
+                            <parameters>
+                                <parameter>$.steps.login</parameter>
+                            </parameters>
+                        </step>
+                    </preprocessing>
+                    <master_item>
+                        <key>browser.midibus.e2e</key>
+                    </master_item>
+                    <triggers>
+                        <trigger>
+                            <expression>last(/midibus/midibus.step.login)=0</expression>
+                            <name>midibus 로그인 실패: {HOST.NAME}</name>
+                            <event_name>midibus 로그인 실패: {HOST.NAME} [{?last(/midibus/midibus.error.class)}: {?last(/midibus/midibus.error.at)}]</event_name>
+                            <opdata>login_ok={ITEM.LASTVALUE1}</opdata>
+                            <priority>HIGH</priority>
+                            <tags>
+                                <tag>
+                                    <tag>service</tag>
+                                    <value>midibus</value>
+                                </tag>
+                                <tag>
+                                    <tag>step</tag>
+                                    <value>login</value>
+                                </tag>
+                            </tags>
+                        </trigger>
+                    </triggers>
+                </item>
+                <item>
+                    <name>midibus - media</name>
+                    <type>DEPENDENT</type>
+                    <key>midibus.step.media</key>
+                    <delay>0</delay>
+                    <preprocessing>
+                        <step>
+                            <type>JSONPATH</type>
+                            <parameters>
+                                <parameter>$.steps.media</parameter>
+                            </parameters>
+                        </step>
+                    </preprocessing>
+                    <master_item>
+                        <key>browser.midibus.e2e</key>
+                    </master_item>
+                    <triggers>
+                        <trigger>
+                            <expression>last(/midibus/midibus.step.media)=0</expression>
+                            <name>midibus 미디어 실패: {HOST.NAME}</name>
+                            <event_name>midibus 미디어 실패: {HOST.NAME} [{?last(/midibus/midibus.error.class)}: {?last(/midibus/midibus.error.at)}]</event_name>
+                            <opdata>media_ok={ITEM.LASTVALUE1}</opdata>
+                            <priority>HIGH</priority>
+                            <dependencies>
+                                <dependency>
+                                    <name>midibus 로그인 실패: {HOST.NAME}</name>
+                                    <expression>last(/midibus/midibus.step.login)=0</expression>
+                                </dependency>
+                            </dependencies>
+                            <tags>
+                                <tag>
+                                    <tag>service</tag>
+                                    <value>midibus</value>
+                                </tag>
+                                <tag>
+                                    <tag>step</tag>
+                                    <value>media</value>
+                                </tag>
+                            </tags>
+                        </trigger>
+                    </triggers>
+                </item>
+                <item>
+                    <name>midibus - securitykey</name>
+                    <type>DEPENDENT</type>
+                    <key>midibus.step.securitykey</key>
+                    <delay>0</delay>
+                    <preprocessing>
+                        <step>
+                            <type>JSONPATH</type>
+                            <parameters>
+                                <parameter>$.steps.securitykey</parameter>
+                            </parameters>
+                        </step>
+                    </preprocessing>
+                    <master_item>
+                        <key>browser.midibus.e2e</key>
+                    </master_item>
+                    <triggers>
+                        <trigger>
+                            <expression>last(/midibus/midibus.step.securitykey)=0</expression>
+                            <name>midibus 보안키 검증 실패: {HOST.NAME}</name>
+                            <event_name>midibus 보안키 검증 실패: {HOST.NAME} [{?last(/midibus/midibus.error.class)}: {?last(/midibus/midibus.error.at)}]</event_name>
+                            <opdata>securitykey_ok={ITEM.LASTVALUE1}</opdata>
+                            <priority>AVERAGE</priority>
+                            <description>보안키 생성 → 배포 URL 적용 → 해당 URL 재생 검증(Step 4)이 실패</description>
+                            <dependencies>
+                                <dependency>
+                                    <name>midibus 로그인 실패: {HOST.NAME}</name>
+                                    <expression>last(/midibus/midibus.step.login)=0</expression>
+                                </dependency>
+                            </dependencies>
+                            <tags>
+                                <tag>
+                                    <tag>service</tag>
+                                    <value>midibus</value>
+                                </tag>
+                                <tag>
+                                    <tag>step</tag>
+                                    <value>securitykey</value>
+                                </tag>
+                            </tags>
+                        </trigger>
+                    </triggers>
+                </item>
+                <item>
+                    <name>midibus - subuser</name>
+                    <type>DEPENDENT</type>
+                    <key>midibus.step.subuser</key>
+                    <delay>0</delay>
+                    <preprocessing>
+                        <step>
+                            <type>JSONPATH</type>
+                            <parameters>
+                                <parameter>$.steps.subuser</parameter>
+                            </parameters>
+                        </step>
+                    </preprocessing>
+                    <master_item>
+                        <key>browser.midibus.e2e</key>
+                    </master_item>
+                    <triggers>
+                        <trigger>
+                            <expression>last(/midibus/midibus.step.subuser)=0</expression>
+                            <name>midibus 보조사용자 검증 실패: {HOST.NAME}</name>
+                            <event_name>midibus 보조사용자 검증 실패: {HOST.NAME} [{?last(/midibus/midibus.error.class)}: {?last(/midibus/midibus.error.at)}]</event_name>
+                            <opdata>subuser_ok={ITEM.LASTVALUE1}</opdata>
+                            <priority>AVERAGE</priority>
+                            <description>보조사용자 추가 → 권한 변경 → 삭제 검증(Step 5)이 실패.</description>
+                            <dependencies>
+                                <dependency>
+                                    <name>midibus 로그인 실패: {HOST.NAME}</name>
+                                    <expression>last(/midibus/midibus.step.login)=0</expression>
+                                </dependency>
+                            </dependencies>
+                            <tags>
+                                <tag>
+                                    <tag>service</tag>
+                                    <value>midibus</value>
+                                </tag>
+                                <tag>
+                                    <tag>step</tag>
+                                    <value>subuser</value>
+                                </tag>
+                            </tags>
+                        </trigger>
+                    </triggers>
+                </item>
+            </items>
+            <macros>
+                <macro>
+                    <macro>{$MIDIBUS.PASS}</macro>
+                    <type>SECRET_TEXT</type>
+                    <description>미디버스 가입 비밀번호</description>
+                </macro>
+                <macro>
+                    <macro>{$MIDIBUS.USER}</macro>
+                    <type>SECRET_TEXT</type>
+                    <description>미디버스 가입 아이디</description>
+                </macro>
+                <macro>
+                    <macro>{$VM.EGRESS_IP}</macro>
+                    <type>SECRET_TEXT</type>
+                    <description>VM 공인 IP</description>
+                </macro>
+            </macros>
+            <inventory_mode>DISABLED</inventory_mode>
+        </host>
+    </hosts>
+</zabbix_export>
