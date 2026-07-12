@@ -48,7 +48,7 @@ TOKEN=$(api user.login "$(jq -n --arg u "$ZBX_USER" --arg p "$ZBX_PASS" '{userna
 proxyid() { api proxy.get     "$(jq -n --arg n "$PROXY" '{output:["proxyid"],filter:{name:[$n]}}')"  "$TOKEN" | jq -r '.result[0].proxyid // empty'; }
 hostid()  { api host.get      "$(jq -n --arg h "$1"     '{output:["hostid"],filter:{host:[$h]}}')"   "$TOKEN" | jq -r '.result[0].hostid // empty'; }
 groupid() { api hostgroup.get "$(jq -n --arg g "$GROUP" '{output:["groupid"],filter:{name:[$g]}}')"  "$TOKEN" | jq -r '.result[0].groupid // empty'; }
-itemid()  { api item.get      "$(jq -n --arg k "$1"     '{output:["itemid"],filter:{key_:[$1]}}')"   "$TOKEN" | jq -r '.result[0].itemid // empty'; }
+itemid()  { api item.get      "$(jq -n --arg k "$1"     '{output:["itemid"],filter:{key_:[$k]}}')"   "$TOKEN" | jq -r '.result[0].itemid // empty'; }
 
 if [ "$MODE" = "delete" ]; then
   # 1) nginx-sample → 서버 직접 감시 복귀 (proxyid는 monitored_by=1일 때만 필수라 0으로 되돌림)
