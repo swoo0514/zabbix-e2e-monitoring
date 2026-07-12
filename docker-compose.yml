@@ -148,6 +148,35 @@ services:
       - zabbix-net
     # 외부 포트 미공개(요구 2.3: 8080 외 차단). Zabbix Server가 내부에서 http://nginx/ 로 접근.
 
+  # ---------------------------------------------------------------------------
+  # 7) [고도화 PROXY] Zabbix Proxy — 데이터 평면 실험 (profile 격리, 평시 미기동)
+  #    목적: store-and-forward 실증(서버 정지 → 프록시 로컬 버퍼 → 재기동 → 무손실).
+  #    기동: docker compose --profile proxy up -d   (맨 up -d에는 안 뜸 = 검증 스택 무변경)
+  #    env→conf 매핑 근거: zabbix-docker 7.0 templates/entrypoints/lib/proxy-config.sh
+  # ---------------------------------------------------------------------------
+  zabbix-proxy:
+    image: zabbix/zabbix-proxy-sqlite3:alpine-7.0.27  # 서버와 동일 패치 고정. 공식: proxy는 server와 major 일치 필수.
+                                                      # sqlite3 백엔드 = 프록시 내장 로컬 버퍼 DB(별도 DB 컨테이너 불필요).
+    profiles: ["proxy"]                               # 실험 프로파일 격리(가드레일). 롤백 = --profile proxy down.
+    container_name: zbx-proxy
+    restart: unless-stopped
+    environment:
+      ZBX_PROXYMODE: 0                     # 0=Active(프록시→서버 방향 접속). 원격 POP/DMZ에서 서버로 나가는 실무 방향.
+      ZBX_HOSTNAME: proxy-01               # ★ 서버 UI/API 등록 이름과 대소문자까지 정확히 일치해야 함(리스크 #6과 동일 함정).
+      ZBX_SERVER_HOST: zabbix-server       # Active 모드에서 config 폴링·데이터 업로드 대상(10051).
+      # --- nginx-sample 이관 대응: BROWSER 아이템(browser.pipeline.check)도 프록시가 실행 ---
+      ZBX_STARTBROWSERPOLLERS: 1           # proxy conf 기본값도 1이나, 서버 Day1의 누락 함정 재발 방지 위해 명시.
+      ZBX_WEBDRIVERURL: http://selenium:4444  # 기본값 없음(미설정 시 browser 아이템 unsupported). selenium 공유.
+      # --- 7.0 버퍼 모드: 기본 disk → hybrid(메모리 속도 + 초과/서버다운 시 디스크 폴백) ---
+      ZBX_PROXYBUFFERMODE: hybrid          # 공식 Values: disk|memory|hybrid, Default disk. 7.0 신기능 시연.
+      ZBX_PROXYMEMORYBUFFERSIZE: 16M       # hybrid/memory 시 필수(기본 0=메모리 버퍼 비활성). Range 128K-2G.
+      # ProxyOfflineBuffer는 기본 1(시간) 그대로 — E1의 5분 정지를 충분히 커버.
+    networks:
+      - zabbix-net
+    # 포트 외부 미공개(요구 2.3 유지). 10051 트래핑은 내부에서 zbx-proxy:10051로.
+    # sqlite 파일은 컨테이너 내부(/var/lib/zabbix/db_data) — 볼륨 미장착: 실험 정지 대상은 서버지 프록시가 아니므로
+    # 버퍼 영속성 불필요. 프록시 자체 재생성 시 버퍼 소실은 트레이드오프로 문서화.
+
   # [ACT1 부하/유실 실험] 버스트 발생기:
   #   공식 zabbix/zabbix-sender 독립 이미지는 없음 → 이미 떠 있는 zbx-agent2에 zabbix_sender가
   #   번들(/usr/bin/zabbix_sender)돼 있어 그걸로 쏜다. 별도 서비스 불필요.
