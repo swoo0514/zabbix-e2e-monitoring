@@ -168,7 +168,8 @@ services:
   zabbix-proxy:
     image: zabbix/zabbix-proxy-sqlite3:alpine-7.0.27  # 서버와 동일 패치 고정. 공식: proxy는 server와 major 일치 필수.
                                                       # sqlite3 백엔드 = 프록시 내장 로컬 버퍼 DB(별도 DB 컨테이너 불필요).
-    profiles: ["proxy"]                               # 실험 프로파일 격리(가드레일). 롤백 = --profile proxy down.
+    profiles: ["proxy"]                               # 실험 프로파일 격리(가드레일). 제거는 rm -sf zabbix-proxy
+                                                      # (주의: --profile ... down은 기본 서비스까지 내림)
     container_name: zbx-proxy
     restart: unless-stopped
     environment:
