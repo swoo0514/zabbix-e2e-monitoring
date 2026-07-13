@@ -96,4 +96,4 @@ fi
 api user.logout '{}' "$TOKEN" >/dev/null 2>&1 || true
 echo "✅ 프로비저닝 완료."
 echo "   프록시 경유 버스트: docker exec zbx-agent2 zabbix_sender -z zbx-proxy -s $LAB_HOST -k burst.proxy -o 1"
-echo "   게이트: UI Data collection → Proxies에서 $PROXY 의 Last seen 갱신 확인"
+echo "   게이트: UI Administration → Proxies에서 $PROXY 의 Last seen 갱신 확인 (7.0 경로)"
