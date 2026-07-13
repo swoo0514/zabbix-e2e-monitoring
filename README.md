@@ -108,7 +108,7 @@ vi .env        # POSTGRES_PASSWORD 등 변경
 # 3) 전체 기동 (단일 명령)
 docker compose up -d
 
-# 4) 상태 확인 — 6개 서비스가 running 이어야 함
+# 4) 상태 확인 — 기본 6개 서비스가 running 이어야 함 (proxy/ha 프로파일 서비스 2개는 평시 미기동)
 docker compose ps
 ```
 
@@ -306,7 +306,7 @@ docker start zbx-nginx-app    # 복구 → RESOLVED → 복구 알림
 
 ## 11. 트러블슈팅
 
-전체 기록은 [TROUBLESHOOTING.md](./TROUBLESHOOTING.md)(8건). 대표 사례:
+전체 기록은 [TROUBLESHOOTING.md](./TROUBLESHOOTING.md)(10건). 대표 사례:
 - **#1** 컨테이너 분리 환경의 "agent not available" — 인터페이스를 IP가 아닌 서비스명 DNS로.
 - **#2** nginx `return` vs `auth_basic` — `return`은 access(auth) 단계를 건너뛴다 → `alias` 파일 서빙.
 - **#3** Browser Item 정석 API 오판 — 대기/alert API는 전용 objects 페이지에 있다(요약본 신뢰 금지).
@@ -349,7 +349,7 @@ docker start zbx-nginx-app    # 복구 → RESOLVED → 복구 알림
 ├─ images/                       # 증빙 스크린샷 (산출물 ⑥)
 ├─ docs/결과보고서.md            # 결과보고서 (산출물 ⑧)
 ├─ testdata/beach.mp4            # 미디어 업로드 테스트 파일
-├─ TROUBLESHOOTING.md            # 트러블슈팅 8건
+├─ TROUBLESHOOTING.md            # 트러블슈팅 10건
 └─ README.md
 ```
 
