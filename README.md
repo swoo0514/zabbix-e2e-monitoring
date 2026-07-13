@@ -526,4 +526,22 @@ docker compose --profile proxy --profile ha rm -sf zabbix-proxy zabbix-server-2
 └─ README.md
 ```
 
+### 13.1 스크립트 레퍼런스
+
+모든 `zabbix/*.sh`는 VM(스택이 기동된 호스트)에서 실행하며, Zabbix API 인증이 필요한 것은 `ZBX_PASS` 환경변수로 관리자 비밀번호를 받습니다(공통 옵션: `ZBX_URL`, `ZBX_USER`). 실행 전 `jq` 필요.
+
+| 스크립트 | 용도 | 사용 예 |
+|---|---|---|
+| `update-item-script.sh` | Browser Item JS를 API(`item.update`)로 배포 — 웹 에디터 손상 우회, config-as-code | `ZBX_PASS='…' bash zabbix/update-item-script.sh` (옵션 `ZBX_KEYS`로 복수 키, `ZBX_SCRIPT`로 임시본 배포) |
+| `set-webscenario-agent.sh` | Web Scenario User-agent를 `Zabbix-Monitor/1.0`으로 설정(요구 4.1) | `ZBX_PASS='…' bash zabbix/set-webscenario-agent.sh` |
+| `get-last-result.sh` | master 반환 JSON 최근값 조회(steps/err/perf/raw) — 시나리오 검증용 | `ZBX_PASS='…' bash zabbix/get-last-result.sh steps` |
+| `flaky-rate.sh` | 스텝별 실행 이력(1/0/2)을 집계해 성공률 산출 | `ZBX_PASS='…' bash zabbix/flaky-rate.sh` (기본 7일 창) |
+| `provision-burst-lab.sh` | 부하 실험용 격리 호스트(`burst-lab`)·trapper 아이템 멱등 생성 / `delete`로 티어다운 | `ZBX_PASS='…' bash zabbix/provision-burst-lab.sh [delete]` |
+| `provision-proxy-lab.sh` | 프록시 등록(`proxy.create`) → nginx-sample 프록시 이관 → `burst-lab-proxy` 생성 / `delete`로 역순 원상복구 | `ZBX_PASS='…' bash zabbix/provision-proxy-lab.sh [delete]` |
+| `burst-sweep.sh` | 지정 경로(직접/프록시)로 R msg/s × DUR초 부하 송신 + sender 실패 집계 | `bash zabbix/burst-sweep.sh server 1000` / `proxy 2000 60` |
+| `count-history.sh` | 아이템 저장 개수·최댓값 조회(유실 = 송신 − 저장 판정) | `ZBX_PASS='…' bash zabbix/count-history.sh burst.proxy 120` |
+| `scripts/gen-htpasswd.sh` | `/secure` Basic Auth 자격 파일(.htpasswd) 생성 | `bash scripts/gen-htpasswd.sh` (`.env`의 NGINX_SECURE_* 사용) |
+
+> 부하·측정 도구 3종(burst-sweep / count-history / flaky-rate)의 해석 주의점: 도착이 지연되는 조건에서는 시간창 계측이 총량을 과소평가할 수 있습니다 — 총량 판정은 고정 구간 집계, 완주 판정은 시퀀스 최댓값 기준([TROUBLESHOOTING #10](./TROUBLESHOOTING.md)).
+
 > 고도화 작업의 상세 로그·설계 결정 원본은 `private/`(git 미추적)에 보관합니다. 본 저장소는 그 핵심을 공개 가능한 범위에서 정리한 것입니다.
