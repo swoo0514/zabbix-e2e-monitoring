@@ -55,6 +55,12 @@ services:
       #  판단: .env 미설정이면 16M(공식 기본) 그대로. Act1 실험 시에만 .env에서 128K(문서상 최소)로 축소해
       #        랩 스케일 버스트로 오버플로 도달. 실험 통제이지 생산 사이징 권고가 아님.
       #  대안/기각: DB를 직접 스로틀(cgroup/tc) → 재현·롤백 복잡. 캐시 env 축소가 가장 깨끗하고 되돌리기 쉬움.
+      # --- [HA] node1 식별자 (빈값=standalone, 공식: HANodeName 미지정 시 단독 모드) ---
+      #  활성화는 .env에서: ZBX_HANODENAME1=node1 / ZBX_NODEADDRESS1=zabbix-server:10051
+      #  NodeAddress는 프론트가 active 노드를 찾는 주소 — 기본값 localhost:10051은 컨테이너에서
+      #  자기 자신을 가리키므로 반드시 서비스명으로 override (concepts/server/ha 7.0).
+      ZBX_HANODENAME: ${ZBX_HANODENAME1:-}
+      ZBX_NODEADDRESS: ${ZBX_NODEADDRESS1:-}
       ZBX_HISTORYCACHESIZE: ${ZBX_HISTORYCACHESIZE:-16M}
       #  무엇: history syncer(DB 배수) 인스턴스 수. 공식 Range 1-100 / Default 4
       #  판단: 미설정이면 4. Act1에서만 1로 낮춰 배수를 느리게 → 유실 임계를 선명화. 최소값이라 유효.
@@ -75,7 +81,10 @@ services:
     container_name: zbx-web
     restart: unless-stopped
     environment:
-      ZBX_SERVER_HOST: zabbix-server           # UI가 데이터를 가져올 Zabbix Server 위치.
+      # [HA] 공식: HA에선 프론트 설정에 서버 주소가 "not defined"여야 DB nodes 테이블로
+      #      active 노드를 자동감지한다. 콜론 없는 `-` 문법 = .env에서 빈 값(ZBX_WEB_SERVER_HOST=)을
+      #      주면 빈 채로 전달, 변수 자체가 없으면 기존값 zabbix-server (standalone 무변경).
+      ZBX_SERVER_HOST: ${ZBX_WEB_SERVER_HOST-zabbix-server}   # UI가 데이터를 가져올 Zabbix Server 위치.
       DB_SERVER_HOST: postgres
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -100,7 +109,9 @@ services:
     container_name: zbx-agent2
     restart: unless-stopped
     environment:
-      ZBX_SERVER_HOST: zabbix-server           # Passive 수집 시 이 서버의 접속을 허용.
+      # [HA] 패시브 체크 allow-list — HA 노드는 쉼표 나열(공식). node2가 active가 된 뒤
+      #      폴링해 와도 거부하지 않도록 미리 두 노드 모두 허용 (standalone에서도 무해).
+      ZBX_SERVER_HOST: "zabbix-server,zabbix-server-2"   # Passive 수집 시 접속을 허용할 서버 목록.
       ZBX_HOSTNAME: "Zabbix server"            # Zabbix 기본 호스트명과 매칭(UI 기본 호스트 인터페이스를 이 컨테이너로 지정 예정).
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro  # Agent2 Docker 플러그인(컨테이너별 CPU/메모리 LLD)용.
@@ -163,7 +174,9 @@ services:
     environment:
       ZBX_PROXYMODE: 0                     # 0=Active(프록시→서버 방향 접속). 원격 POP/DMZ에서 서버로 나가는 실무 방향.
       ZBX_HOSTNAME: proxy-01               # ★ 서버 UI/API 등록 이름과 대소문자까지 정확히 일치해야 함(리스크 #6과 동일 함정).
-      ZBX_SERVER_HOST: zabbix-server       # Active 모드에서 config 폴링·데이터 업로드 대상(10051).
+      # [HA] Active 프록시의 HA 노드 나열은 세미콜론(공식: Server=node1;node2. 쉼표는 패시브용).
+      #      HA 시 .env: ZBX_PROXY_SERVER_LIST=zabbix-server;zabbix-server-2 — 없으면 failover 후 업로드 중단.
+      ZBX_SERVER_HOST: ${ZBX_PROXY_SERVER_LIST:-zabbix-server}  # Active 모드 config 폴링·업로드 대상(10051).
       # --- nginx-sample 이관 대응: BROWSER 아이템(browser.pipeline.check)도 프록시가 실행 ---
       ZBX_STARTBROWSERPOLLERS: 1           # proxy conf 기본값도 1이나, 서버 Day1의 누락 함정 재발 방지 위해 명시.
       ZBX_WEBDRIVERURL: http://selenium:4444  # 기본값 없음(미설정 시 browser 아이템 unsupported). selenium 공유.
@@ -176,6 +189,34 @@ services:
     # 포트 외부 미공개(요구 2.3 유지). 10051 트래핑은 내부에서 zbx-proxy:10051로.
     # sqlite 파일은 컨테이너 내부(/var/lib/zabbix/db_data) — 볼륨 미장착: 실험 정지 대상은 서버지 프록시가 아니므로
     # 버퍼 영속성 불필요. 프록시 자체 재생성 시 버퍼 소실은 트레이드오프로 문서화.
+
+  # ---------------------------------------------------------------------------
+  # 8) [고도화 HA] Zabbix Server node2 — standby (profile 격리, 평시 미기동)
+  #    공식(concepts/server/ha 7.0): 다중 서버가 "같은 DB"를 공유, active 1 + standby N.
+  #    standby는 HA manager 프로세스 1개만 구동(포트 미개방·DB 연결 최소) → 부하 미미.
+  #    기동: .env에 node1 식별자 채운 뒤  docker compose --profile ha up -d
+  # ---------------------------------------------------------------------------
+  zabbix-server-2:
+    image: zabbix/zabbix-server-pgsql:alpine-7.0.27   # node1과 동일 패치. 클러스터는 마이너 차이도 호환(공식)이나 동일 고정이 더 엄격.
+    container_name: zbx-server-2
+    profiles: ["ha"]
+    restart: unless-stopped
+    environment:
+      DB_SERVER_HOST: postgres            # ★ node1과 같은 DB — HA의 요체이자 남은 SPOF(보고서 명명).
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      ZBX_HANODENAME: node2               # 노드 고유명(필수 — 없으면 standalone으로 떠서 클러스터 미조인).
+      ZBX_NODEADDRESS: zabbix-server-2:10051  # 프론트가 이 노드를 찾을 주소. localhost 금지(기본값 함정).
+      # --- node1 미러 (인계 후에도 Browser Item이 살아 있으려면 필수 — arc-03 함정 #7) ---
+      ZBX_STARTBROWSERPOLLERS: 1
+      ZBX_WEBDRIVERURL: http://selenium:4444
+    depends_on:
+      postgres:
+        condition: service_healthy        # 같은 DB의 기존 스키마를 보고 조인(재초기화 안 함).
+    networks:
+      - zabbix-net
+    # 10051 내부 전용 — node1과 포트 충돌 없음(호스트 포트 미공개).
 
   # [ACT1 부하/유실 실험] 버스트 발생기:
   #   공식 zabbix/zabbix-sender 독립 이미지는 없음 → 이미 떠 있는 zbx-agent2에 zabbix_sender가
