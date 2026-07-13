@@ -356,7 +356,7 @@ compose profile로 격리된 이중화 구성의 실측 결과입니다(방법·
 | HA failover | active 노드 `docker stop` / `docker kill` | standby 자동 승격 — 정상 종료 **3.6초**, 크래시 **16.6초** |
 | HA+프록시 결합 | failover 진행 중 프록시 경유 정속 송신(초당 1건) | **180/180 무손실** — 승격까지의 공백을 프록시 버퍼가 보완 |
 
-| 정전 구간 — 프록시 경유(연속) | 결합 실험 — failover 관통 무손실 |
+| 서버 중단 구간 — 프록시 경유(연속) | 결합 실험 — failover 중 무손실 |
 |---|---|
 | ![프록시 backfill](images/img_31.png) | ![E4 무손실](images/img_46.png) |
 
