@@ -2,3 +2,5 @@
 /private
 .env
 nginx/auth/.htpasswd
+# MS Office 임시 잠금파일
+~$*

@@ -12,6 +12,10 @@
             <host>nginx-sample</host>
             <name>nginx-sample</name>
             <description>nginx 샘플앱 - Web Scenario 가용성 대상</description>
+            <monitored_by>PROXY</monitored_by>
+            <proxy>
+                <name>proxy-01</name>
+            </proxy>
             <templates>
                 <template>
                     <name>Nginx by HTTP</name>
@@ -48,6 +52,7 @@ return JSON.stringify(browser.getResult());</params>
             <httptests>
                 <httptest>
                     <name>nginx-availability</name>
+                    <agent>Zabbix-Monitor/1.0</agent>
                     <steps>
                         <step>
                             <name>main</name>

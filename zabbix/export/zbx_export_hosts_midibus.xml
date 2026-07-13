@@ -696,12 +696,12 @@ try {
   if (hasErrors) { result.errors = errors; }
   if (only !== null) { result.only = &quot;&quot; + params.only; }   // 온디맨드 실행임을 payload에 자기서술
   return JSON.stringify(result);
-}
-</params>
+}</params>
                     <timeout>300s</timeout>
                     <parameters>
                         <parameter>
                             <name>only</name>
+                            <value>securitykey</value>
                         </parameter>
                         <parameter>
                             <name>password</name>
