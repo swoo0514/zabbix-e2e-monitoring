@@ -491,11 +491,25 @@ docker compose --profile proxy --profile ha rm -sf zabbix-proxy zabbix-server-2
 | ③ | nginx 앱 (`/`·`/health`·`/status`) | [`nginx/`](./nginx) |
 | ④ | Web Scenario XML Export | [`zabbix/export/`](./zabbix/export) |
 | ⑤ | Browser Item 설정·결과 | [`zabbix/midibus-browser-item.js`](./zabbix/midibus-browser-item.js) · `zabbix/export/` |
-| ⑥ | Trigger·Action + 장애/복구 스크린샷 | [`images/`](./images) · [10. 장애 테스트](#10-장애-테스트) |
+| ⑥ | Trigger·Action + 장애/복구 스크린샷 | [12.1 장애·복구 증빙 이미지](#121-장애복구-증빙-이미지) · 재현 절차: [10. 장애 테스트](#10-장애-테스트) |
 | ⑦ | README | 본 문서 |
 | ⑧ | 결과보고서 | [`docs/결과보고서.md`](docs/결과보고서.md) |
 
 추가 제출물: 발표자료 — [`docs/발표자료.pdf`](docs/발표자료.pdf)
+
+### 12.1 장애·복구 증빙 이미지
+
+산출물 ⑥의 핵심 증빙을 단계별로 특정한 목록입니다. 전체 이미지는 [`images/`](./images) 참고.
+
+| 단계 | 파일 | 내용 |
+|---|---|---|
+| 트리거 정의 | [`img_2`](images/img_2.png) · [`img_14`](images/img_14.png) | nginx 트리거 3종(+`check`/`service` 태그) · midibus 트리거 4종(`service:midibus`) |
+| 트리거 의존성 | [`img_26`](images/img_26.png) · [`img_27`](images/img_27.png) | 로그인을 부모로 두는 별형 Depends on 재편(알림 6건→1건의 근거) |
+| 장애 유발 | [`img_8`](images/img_8.png) | `docker stop/start` 터미널 — 장애 재현 방법 |
+| PROBLEM 발생 | [`img_3`](images/img_3.png) · [`img_4`](images/img_4.png) · [`img_6`](images/img_6.png) | Web scenario failed → +Bad HTTP status(2건) → Response time>3s(Warning) |
+| RESOLVED 복구 | [`img_5`](images/img_5.png) · [`img_7`](images/img_7.png) · [`img_15`](images/img_15.png) | nginx 2건 RESOLVED → 3건 전부 RESOLVED → midibus 4종 RESOLVED |
+| Email 알림 | [`img_10`](images/img_10.png) · [`img_9`](images/img_9.png) · [`img_11`](images/img_11.png) | PROBLEM 수신 → RESOLVED 수신("Resolved in 1m 0s") → Action log Sent 기록 |
+| Slack 알림 | [`img_16`](images/img_16.png) · [`img_22`](images/img_22.png) · [`img_21`](images/img_21.png) | PROBLEM+RESOLVED 메시지 → P→R 페어(1m12s) → fault injection 시 6종 연쇄 |
 
 ---
 
