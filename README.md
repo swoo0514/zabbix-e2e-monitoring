@@ -72,7 +72,7 @@ flowchart LR
   server -->|알림| notify["Slack / Email"]
 ```
 
-**포트 정책** — 외부로 여는 것은 **`8080`(Zabbix Web UI) 하나뿐**입니다. PostgreSQL(5432)·Server(10051)·Agent(10050)·Selenium(4444)·nginx(80)은 모두 내부 브리지(`zabbix-net`)로만 통신합니다. 점선의 두 서비스(`zabbix-proxy`·`zabbix-server-2`)는 compose **profile**(proxy·ha)로 격리된 이중화 실험 구성으로, 기동해도 외부 노출은 변하지 않습니다([10.5 이중화 실측](#105-이중화-실측--zabbix-proxy--서버-ha) 참고).
+**포트 정책** — 컨테이너가 호스트에 공개(publish)하는 서비스 포트는 **`8080`(Zabbix Web UI) 하나뿐**입니다. PostgreSQL(5432)·Server(10051)·Agent(10050)·Selenium(4444)·nginx(80)은 모두 내부 브리지(`zabbix-net`)로만 통신합니다. 관리용 SSH(22)는 서비스 스택과 별개로 Security Group에서 허용 IP 한정으로 개방합니다. 점선의 두 서비스(`zabbix-proxy`·`zabbix-server-2`)는 compose **profile**(proxy·ha)로 격리된 이중화 실험 구성으로, 기동해도 외부 노출은 변하지 않습니다([10.5 이중화 실측](#105-이중화-실측--zabbix-proxy--서버-ha) 참고).
 
 **데이터 흐름** — ① Server가 nginx에 HTTP 요청(Web Scenario) / Selenium을 통해 midibus에 실브라우저 접속(Browser Item) → ② 결과를 PostgreSQL에 저장 → ③ Trigger가 판정(PROBLEM/RESOLVED) → ④ Action이 Slack/Email로 발송.
 
