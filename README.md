@@ -43,7 +43,7 @@ Zabbix 7.0 LTS의 **Web Scenario**와 **Browser Item**으로 웹서비스의 E2E
 | 핵심 기술 | Linux, Docker Compose, Zabbix 7.0 LTS, Nginx, Selenium(WebDriver) |
 | 배포 | Cloud VM(Ubuntu 24.04) 단일 Docker Compose 스택 |
 
-필수 산출물 8종을 모두 저장소에 커밋했으며, 산출물별 위치는 [13. 산출물 대응표](#13-산출물-대응표)에 정리했습니다.
+필수 산출물 8종을 모두 저장소에 커밋했으며, 산출물별 위치는 [12. 산출물 대응표](#12-산출물-대응표)에 정리했습니다.
 
 ---
 
@@ -494,6 +494,8 @@ docker compose --profile proxy --profile ha rm -sf zabbix-proxy zabbix-server-2
 | ⑥ | Trigger·Action + 장애/복구 스크린샷 | [`images/`](./images) · [10. 장애 테스트](#10-장애-테스트) |
 | ⑦ | README | 본 문서 |
 | ⑧ | 결과보고서 | [`docs/결과보고서.md`](docs/결과보고서.md) |
+
+추가 제출물: 발표자료 — [`docs/발표자료.pdf`](docs/발표자료.pdf)
 
 ---
 
