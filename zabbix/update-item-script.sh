@@ -1,16 +1,7 @@
 #!/usr/bin/env bash
-# =============================================================================
-# Zabbix Browser item 스크립트를 API로 직접 갱신 (웹 에디터 붙여넣기 우회)
-#
-# 사용 (VM에서):
-#   sudo apt install -y jq          # jq 없으면
-#   ZBX_PASS='관리자비밀번호' bash zabbix/update-item-script.sh
-#
-# 옵션(환경변수): ZBX_URL(기본 http://localhost:8080/api_jsonrpc.php), ZBX_USER(기본 Admin)
-#                ZBX_KEYS(기본 browser.midibus.e2e — 공백 구분 복수 키 가능)
-#   예) 온디맨드 아이템만:  ZBX_KEYS="browser.midibus.ondemand" ZBX_PASS='...' bash zabbix/update-item-script.sh
-#       둘 다:              ZBX_KEYS="browser.midibus.e2e browser.midibus.ondemand" ZBX_PASS='...' bash ...
-# =============================================================================
+# Browser item 스크립트를 API(item.update)로 배포 — 웹 에디터 붙여넣기 시 코드 손상 방지.
+# 사용: ZBX_PASS='...' bash zabbix/update-item-script.sh
+# env: ZBX_KEYS(공백 구분 복수 키), ZBX_SCRIPT(임시본 배포 — fault injection용)
 set -euo pipefail
 
 ZBX_URL="${ZBX_URL:-http://localhost:8080/api_jsonrpc.php}"

@@ -1,17 +1,8 @@
 #!/usr/bin/env bash
-# =============================================================================
-# [E3 레이트 스윕] R msg/s를 DUR초 동안 지정 경로(직접/프록시)로 송신
-#   Act1 §5의 "레이트 스윕(50→1000)"용. zbx-agent2 번들 zabbix_sender 사용.
-#
-# 사용 (VM에서):
-#   bash zabbix/burst-sweep.sh server 50        # 직접 경로, 50 msg/s × 60s
-#   bash zabbix/burst-sweep.sh proxy  200 60    # 프록시 경로, 200 msg/s × 60s
-#
-# 값 규칙: rate*100000 + 순번 → 레이트별로 값 대역이 달라 뒤섞여도 식별 가능.
-# 레이트 정밀도 주의: 1초마다 R건 묶음 전송(전송시간+1s)이라 실효 레이트는
-#   명목보다 약간 낮다. 판정은 어차피 "송신 총수 vs 저장 총수"라 영향 없음.
-# 측정: 각 실행 후 count-history.sh <key> <dur+30> 로 저장수 비교 + pused 그래프 피크.
-# =============================================================================
+# 레이트 스윕 부하 발생기 — R msg/s × DUR초를 직접(server)/프록시(proxy) 경로로 송신.
+# 사용: bash zabbix/burst-sweep.sh <server|proxy> <rate> [dur=60]
+# 값 규칙: rate*100000+순번 → 레이트별 대역 분리로 뒤섞여도 식별 가능.
+# 실효 레이트는 명목보다 약간 낮음(전송시간+1s) — 판정은 "송신 총수 vs 저장 총수"라 영향 없음.
 set -euo pipefail
 
 PATHSEL="${1:?사용법: burst-sweep.sh <server|proxy> <rate> [dur=60]}"

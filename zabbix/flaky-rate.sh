@@ -1,17 +1,7 @@
 #!/usr/bin/env bash
-# =============================================================================
-# midibus E2E 스텝별 성공률 집계 (flaky 정량화)
-#   Zabbix history.get으로 최근 N일간 각 스텝 dependent item의 1/0/2 분포를 세어
-#   성공률 = 성공(1) / (성공+실패) 로 계산한다. (스킵=2는 부분실행이라 분모 제외)
-#   로그인 스텝은 항상 실행되므로 login 성공률이 곧 E2E 전체 성공률의 대표값.
-#
-# 사용 (VM에서):
-#   ZBX_PASS='관리자비밀번호' bash zabbix/flaky-rate.sh          # 최근 7일
-#   ZBX_PASS='관리자비밀번호' bash zabbix/flaky-rate.sh 3        # 최근 3일
-#
-# 근거: history.get  https://www.zabbix.com/documentation/7.0/en/manual/api/reference/history/get
-#       (history 파라미터 3 = numeric unsigned)
-# =============================================================================
+# midibus 스텝별 성공률 집계 — 성공률 = 1/(1+0), 스킵(2)은 부분실행이라 분모 제외.
+# login은 항상 실행되므로 login 행이 E2E 전체 성공률의 대표값.
+# 사용: ZBX_PASS='...' bash zabbix/flaky-rate.sh [일수=7]
 set -euo pipefail
 
 ZBX_URL="${ZBX_URL:-http://localhost:8080/api_jsonrpc.php}"

@@ -1,31 +1,15 @@
 /*
- * midibus Browser Item - E2E scenario (Zabbix 7.0 Browser item)
- * -----------------------------------------------------------------------------
- * Host: midibus / key: browser.midibus.e2e (+ browser.midibus.ondemand) / Type: Browser / Timeout 300s
- * Params: username={$MIDIBUS.USER} password={$MIDIBUS.PASS} url=https://midibus.kinxcdn.com/login
- *         allowed_ip={$VM.EGRESS_IP}  (Secret 매크로 — 보안키 허용 IP. 비면 IP 제한 없음, 있으면 그 IP로 제한)
- *         only=<block[,block]>  (선택. 예: "securitykey", "media,subuser". 미설정=전체 실행.
- *                                login은 항상 실행. "deploy"는 "category"의 별칭.
- *                                운영 아이템에는 절대 설정하지 않는다 - 온디맨드 전용)
- * 선행: selenium 컨테이너 /testdata/beach.mp4 (compose 마운트)
- * 배포: zabbix/update-item-script.sh (API push. ZBX_KEYS로 대상 키 지정 가능)
+ * midibus Browser Item - E2E scenario (Zabbix 7.0)
+ * Host: midibus / key: browser.midibus.e2e (+ .ondemand) / Type: Browser / Timeout 300s
+ * Params: username, password, url, allowed_ip={$VM.EGRESS_IP}(Secret — 비면 IP 제한 없음),
+ *         only=<block[,block]> — 온디맨드 전용. 운영 아이템에는 절대 설정 금지. login은 항상 실행.
+ * 배포: zabbix/update-item-script.sh (웹 에디터 금지 — API push)
  *
- * 구조:
- *  - 스텝 격리: login(치명, 실패 시 전체 중단) 외 4개 블록(category/media/subuser/securitykey)은
- *    runBlock()의 개별 try/catch로 격리 - 한 블록이 죽어도 나머지는 계속 검사된다.
- *    블록별 에러는 result.errors.<block>={at,class,msg}, 최초 에러만 steps.err*로 승격(기존 dependent 호환).
- *  - 셀렉터 폴백: find/findX의 sel에 배열을 주면 후보를 라운드로빈(2s 프로브, 총예산 10s)으로 시도.
- *    1순위가 아닌 후보로 성공하면 healed에 기록(= UI 드리프트 신호). healed_count는 항상 반환(0 포함).
- *    주의: 커스텀 implicit wait 구간(업로드 60s)에는 배열 셀렉터 금지(프로브가 예산을 덮어씀).
- *  - steps 값: 1=성공, 0=실패, 2=스킵(only로 제외됨. last()=0 트리거에 안 걸리는 값).
- *
- * 정석 API (레퍼런스: manual/config/items/preprocessing/javascript/browser_item_javascript_objects):
- *  - setElementWaitTimeout : findElement 암묵적 대기(요소 '존재' 대기 -> 수동 폴링 제거)
- *  - unhandledPromptBehavior=accept : 네이티브 confirm 자동 수락(표준 W3C capability)
- *  - collectPerfEntries(mark): 스텝별 성능 마크
- *  - setError / BrowserError: 구조화된 에러
- *  - getProperty            : 체크박스 실시간 상태
- * 주의: implicit wait는 '가림(click intercepted)'은 못 푼다 -> click()에서 가림일 때만 재시도.
+ * - 스텝 격리: login(치명) 외 4블록은 runBlock() 개별 try/catch — 한 블록이 죽어도 나머지 계속.
+ * - 셀렉터 폴백: sel 배열 시 라운드로빈(2s 프로브/총 10s). 비1순위 성공=healed 기록(드리프트 신호).
+ *   주의: 커스텀 wait 구간(업로드 60s)에는 배열 셀렉터 금지(프로브가 예산을 덮어씀).
+ * - steps 값: 1=성공, 0=실패, 2=스킵(last()=0 트리거에 안 걸리는 값).
+ * - implicit wait는 '가림(intercepted)'은 못 푼다 -> click/type에서 가림·미준비일 때만 재시도.
  */
 var WAIT_MAIN = 10000;   // 기본 implicit wait
 var WAIT_PROBE = 2000;   // 폴백 배열 프로브용 짧은 wait

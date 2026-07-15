@@ -1,18 +1,7 @@
 #!/usr/bin/env bash
-# =============================================================================
-# 마스터 Browser item(browser.midibus.e2e)의 "가장 최근 반환 JSON"을 조회 (검증용)
-#
-# 사용 (VM에서):
-#   ZBX_PASS='관리자비밀번호' bash zabbix/get-last-result.sh [steps|err|perf|raw]
-#
-#   steps : 스텝 성공여부 + failed_step + 스텝별 소요시간   (기본값)
-#   err   : 실패 지점(err_at)·에러 분류(err_class)          (에러 경로 검증용)
-#   perf  : 전체 duration + 수집된 perf 마크 목록
-#   raw   : 반환 JSON 전체
-#
-# 옵션(환경변수): ZBX_URL(기본 http://localhost:8080/api_jsonrpc.php), ZBX_USER(기본 Admin)
-#                ZBX_KEY(기본 browser.midibus.e2e — 온디맨드 확인: ZBX_KEY=browser.midibus.ondemand)
-# =============================================================================
+# 마스터 Browser item의 최근 반환 JSON 조회 — 스크립트 수정 후 검증 루프의 기본 도구.
+# 사용: ZBX_PASS='...' bash zabbix/get-last-result.sh [steps|err|perf|raw]
+# env: ZBX_KEY(기본 browser.midibus.e2e — 온디맨드는 browser.midibus.ondemand)
 set -euo pipefail
 
 ZBX_URL="${ZBX_URL:-http://localhost:8080/api_jsonrpc.php}"

@@ -1,17 +1,7 @@
 #!/usr/bin/env bash
-# =============================================================================
-# [ACT1/2 부하실험] 특정 아이템에 저장된 히스토리 개수 조회 (유실 = N - 저장 계산용)
-#
-# 사용 (VM에서):
-#   ZBX_PASS='관리자비밀번호' bash zabbix/count-history.sh burst.direct [초]
-#     - 인자1: 아이템 key_ (기본 burst.direct)
-#     - 인자2: 최근 N초 범위만 셀 때(선택). 없으면 전체.
-#   출력: 저장된 값 개수 + 최근값/최댓값(순번 확인용)
-#
-# 옵션(env): ZBX_URL, ZBX_USER(기본 Admin), ZBX_HISTORY(값 타입, 기본 3=unsigned)
-#   history 타입: 0=float 1=char 2=log 3=unsigned 4=text
-#   근거: history.get  https://www.zabbix.com/documentation/7.0/en/manual/api/reference/history/get
-# =============================================================================
+# 아이템의 DB 저장 히스토리 개수 조회 — 유실 = 송신 N − 저장개수 판정용.
+# 사용: ZBX_PASS='...' bash zabbix/count-history.sh <key> [최근N초]
+# 주의: [최근N초]는 실행 시점 기준 슬라이딩 창 — 재조회 시 창이 밀림(고정 구간은 버킷 집계로).
 set -euo pipefail
 
 ZBX_URL="${ZBX_URL:-http://localhost:8080/api_jsonrpc.php}"

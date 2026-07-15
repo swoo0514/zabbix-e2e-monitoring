@@ -1,20 +1,7 @@
 #!/usr/bin/env bash
-# =============================================================================
-# Web Scenario의 User-agent(Agent 필드)를 API로 설정 — 요구사항 4.1 정합
-#
-# 배경: Agent 필드를 비워두면 Zabbix 기본 UA로 요청된다. 요구사항서 4.1은
-#       커스텀 UA(예: Zabbix-Monitor/1.0) 명시를 요구 → httptest.update로 주입.
-#       https://www.zabbix.com/documentation/7.0/en/manual/api/reference/httptest/update
-#
-# 사용 (VM에서):
-#   ZBX_PASS='관리자비밀번호' bash zabbix/set-webscenario-agent.sh
-#
-# 옵션(환경변수): ZBX_URL(기본 http://localhost:8080/api_jsonrpc.php), ZBX_USER(기본 Admin)
-#                ZBX_HTTPTEST(기본 nginx-availability), ZBX_AGENT(기본 Zabbix-Monitor/1.0)
-#
-# 검증: 실행 후 nginx 접근 로그에서 UA 확인 —
-#   docker compose logs --tail 20 nginx | grep 'Zabbix-Monitor'
-# =============================================================================
+# Web Scenario의 User-agent를 API(httptest.update)로 주입 — 요구사항 4.1 정합.
+# 사용: ZBX_PASS='...' bash zabbix/set-webscenario-agent.sh
+# 검증: docker compose logs --tail 20 nginx | grep 'Zabbix-Monitor'
 set -euo pipefail
 
 ZBX_URL="${ZBX_URL:-http://localhost:8080/api_jsonrpc.php}"

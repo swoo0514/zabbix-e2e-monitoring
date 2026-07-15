@@ -1,28 +1,7 @@
 #!/usr/bin/env bash
-# =============================================================================
-# [고도화 PROXY] 프록시 등록 + 호스트 전환 프로비저닝 (Config-as-Code)
-#   provision-burst-lab.sh의 API 패턴(user.login → Bearer → *.create) 클론.
-#
-# 하는 일 (create, 멱등):
-#   1. proxy.create  — proxy-01, operating_mode=0(Active)     ※ 7.0에서 proxy 객체 개편(name/operating_mode)
-#   2. host.update   — nginx-sample을 monitored_by=1(Proxy)로 전환 (proxyid 필수)
-#   3. host.create   — burst-lab-proxy (그룹 Availability Lab 재사용, 프록시 감시)
-#   4. item.create   — burst.proxy (trapper, burst.direct와 동일 스펙 → 사과-대-사과 비교)
-#
-# delete 모드 (역순 원상복구):
-#   nginx-sample monitored_by=0(Server) 복귀 → burst-lab-proxy 삭제 → proxy-01 삭제
-#   (그룹 Availability Lab은 burst-lab과 공유라 남긴다)
-#
-# 사용 (VM에서):
-#   ZBX_PASS='관리자비밀번호' bash zabbix/provision-proxy-lab.sh          # 생성(멱등)
-#   ZBX_PASS='관리자비밀번호' bash zabbix/provision-proxy-lab.sh delete   # 티어다운
-#
-# 근거(7.0 고정):
-#   proxy.create  https://www.zabbix.com/documentation/7.0/en/manual/api/reference/proxy/create
-#   host object(monitored_by: 0=server 1=proxy / proxyid: monitored_by=1일 때 필수)
-#                 https://www.zabbix.com/documentation/7.0/en/manual/api/reference/host/object
-#   trapper item  https://www.zabbix.com/documentation/7.0/en/manual/config/items/itemtypes/trapper
-# =============================================================================
+# 프록시 등록 + nginx-sample 프록시 이관 + 부하 lab 호스트 생성 (멱등).
+# delete 모드 = 역순 원상복구(nginx 서버 감시 복귀 → lab 삭제 → 프록시 삭제) — 롤백 1커맨드.
+# 사용: ZBX_PASS='...' bash zabbix/provision-proxy-lab.sh [delete]
 set -euo pipefail
 
 ZBX_URL="${ZBX_URL:-http://localhost:8080/api_jsonrpc.php}"
